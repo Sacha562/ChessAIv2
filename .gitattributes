@@ -1,0 +1,4 @@
+# Normalize line endings to LF in the repo and on checkout.
+# The source is edited on Windows but built in WSL/Linux, where a CRLF
+# Makefile or shell script would break the build.
+* text=auto eol=lf

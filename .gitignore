@@ -1,0 +1,26 @@
+# Build output
+/build/
+*.o
+*.obj
+*.exe
+chessai
+
+# Profiling / PGO
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Engine data (kept out of the repo)
+/nets/
+*.nnue
+/syzygy/
+*.bin
+
+# Editor / IDE
+.vscode/
+.idea/
+*.user
+
+# Claude Code (local, machine-specific settings)
+.claude/settings.local.json
