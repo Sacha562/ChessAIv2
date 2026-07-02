@@ -1,0 +1,56 @@
+# ChessAIv2 static-analysis rules — the semantic half of cpp-style-guide.md.
+#
+# Curated, high-signal check set: bug-proneness, performance, modern C++, and the
+# C++ Core Guidelines, minus the checks that would fight this project's deliberate
+# choices. It is ADVISORY (WarningsAsErrors is empty) — run it locally / in CI:
+#
+#     clang-tidy -p build src/*.cpp        # needs a compile_commands.json (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
+#
+# Intentionally NOT enforced here (governed by the prose guide instead, to avoid
+# false positives on sanctioned idiom):
+#   * naming            — readability-identifier-naming is off, because types.hpp's
+#                         mate_in/mated_in/is_mate and run_uci use sanctioned
+#                         snake_case (cpp-style-guide.md §5). Naming is on the reader.
+#   * magic numbers     — too aggressive for an engine full of tuned constants; the
+#                         guide's "name meaningful numbers" rule is a human judgement.
+#   * std::endl         — performance-avoid-endl is off: UCI output MUST flush per
+#                         line, so std::endl is correct there (see uci.cpp).
+---
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  cppcoreguidelines-*,
+  readability-*,
+  portability-*,
+  misc-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-auto,
+  -modernize-use-nodiscard,
+  -modernize-avoid-c-arrays,
+  -modernize-pass-by-value,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -readability-magic-numbers,
+  -readability-identifier-naming,
+  -readability-identifier-length,
+  -readability-braces-around-statements,
+  -readability-function-cognitive-complexity,
+  -bugprone-easily-swappable-parameters,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  -performance-avoid-endl
+
+# Only diagnose our own headers; never the vendored include/chess.hpp.
+HeaderFilterRegex: '.*src.*'
+
+# Advisory only — the hook (check_cpp_style.py) is the gate, not this.
+WarningsAsErrors: ''
+
+# Apply fixes through our formatting rules.
+FormatStyle: file

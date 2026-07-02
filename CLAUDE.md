@@ -67,3 +67,50 @@ The always-on documentation rule also lives in
 [`.agents/rules/documentation.md`](.agents/rules/documentation.md) for editors that
 read that convention (Cursor/Windsurf); this `CLAUDE.md` is the equivalent for
 Claude Code.
+
+## The C++ must be ultra-clean (READ THIS BEFORE WRITING CODE)
+
+Every line of C++ in this project follows one strict style. The full rules live in
+[cpp-style-guide.md](cpp-style-guide.md) — read it **in full** before writing or
+modifying any `.hpp`/`.cpp`. It is the C++ equivalent of the documentation style
+guide: authoritative, not advisory, and **not** to be improvised around.
+
+**The standard, in one line:**
+
+> **Ultra-clean, no spaghetti.** Small single-purpose functions, shallow control
+> flow (early-return guard clauses, nesting ≤ ~3), const-correct, `constexpr` over
+> macros, no magic numbers, no raw owning pointers, no `using namespace` in headers,
+> and **zero heap allocation / I/O / locks on the per-node search path.** Match the
+> existing conventions exactly: `#pragma once`, `namespace engine { … } // namespace`,
+> anonymous-namespace internal helpers, PascalCase types, camelCase functions/locals,
+> trailing-underscore members (`nodes_`), `SCREAMING_SNAKE` `constexpr` constants,
+> 4-space K&R, West const, `static_cast` (never C casts).
+
+**How it is enforced (three layers, same philosophy as the docs rule):**
+
+- **Always-loaded rules.** This `CLAUDE.md` section (Claude Code) and
+  [`.agents/rules/cpp-style.md`](.agents/rules/cpp-style.md) (`trigger: always_on`,
+  for Cursor/Windsurf) inject the rule into every session.
+- **Machine-enforced formatting.** [`.clang-format`](.clang-format) at the repo root
+  defines the layout objectively. Run it on every file you touch before finishing:
+  ```bash
+  clang-format -i src/<file>.hpp src/<file>.cpp
+  ```
+- **Static analysis.** A curated [`.clang-tidy`](.clang-tidy) flags bug-proneness,
+  performance traps, and Core-Guidelines issues (advisory; run `clang-tidy -p build
+  src/*.cpp`).
+- **An automated gate blocks you, like the docs one does.**
+  [`scripts/check_cpp_style.py`](scripts/check_cpp_style.py) is wired into a
+  **PostToolUse** nudge and a **Stop** hook that *blocks the turn from ending* on the
+  unambiguous, clang-format-can't-fix violations (tab indentation, a header missing
+  `#pragma once`, `using namespace` in a header). If it blocks, fix it — don't work
+  around it. Check anytime: `python scripts/check_cpp_style.py --check`.
+- **The design rules are on you.** No tool checks naming, single-responsibility,
+  ownership, or hot-path allocation. Self-review against the guide's pre-finish
+  checklist ([Appendix B](cpp-style-guide.md#appendix-b--pre-finish-checklist)) before
+  ending a turn. When a rule seems wrong for a case, **ask the user** — do not invent
+  an exception.
+
+Remember: a C++ change is not done until (1) it is clean per
+[cpp-style-guide.md](cpp-style-guide.md), **and** (2) its `.md` companion is updated in
+the same turn (the Stop hook checks the second; you own the first).

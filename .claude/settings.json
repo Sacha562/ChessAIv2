@@ -10,6 +10,12 @@
             "command": "python scripts/check_docs_sync.py --event post-tool",
             "timeout": 30,
             "statusMessage": "Checking doc companion..."
+          },
+          {
+            "type": "command",
+            "command": "python scripts/check_cpp_style.py --event post-tool",
+            "timeout": 30,
+            "statusMessage": "Checking C++ style..."
           }
         ]
       }
@@ -22,6 +28,12 @@
             "command": "python scripts/check_docs_sync.py --event stop",
             "timeout": 30,
             "statusMessage": "Verifying docs are in sync..."
+          },
+          {
+            "type": "command",
+            "command": "python scripts/check_cpp_style.py --event stop",
+            "timeout": 30,
+            "statusMessage": "Verifying C++ style..."
           }
         ]
       }

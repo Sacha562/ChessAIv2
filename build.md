@@ -81,6 +81,40 @@ unsigned binary — hence WSL2 for actually executing it.
 See [main.cpp.md](src/main.cpp.md) for dispatch and [README.md](README.md) for the
 full command list.
 
+## Code Style & Formatting
+
+C++ style is governed by [cpp-style-guide.md](cpp-style-guide.md). Its formatting half is
+machine-enforced by [.clang-format](.clang-format) at the repo root (C++20, 4-space indent,
+100 columns, attached braces, left-aligned pointers, preserved include grouping). Format any
+file you touch before finishing:
+
+```bash
+clang-format -i src/<file>.hpp src/<file>.cpp    # or format-on-save in your editor
+```
+
+`.clang-format` is tuned to match the existing `src/` code, so running it is near-idempotent.
+`clang-format` and `clang-tidy` are not in the base toolchain install ([README.md](README.md));
+add them once in WSL with `sudo apt-get install -y clang-format clang-tidy`. The Python style
+gate below needs no install.
+
+A curated [.clang-tidy](.clang-tidy) adds advisory static analysis (bug-proneness, performance,
+Core Guidelines); run it against a compile database:
+
+```bash
+cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+clang-tidy -p build src/*.cpp
+```
+
+The mechanical rules that clang-format cannot fix are gated by
+[scripts/check_cpp_style.py](scripts/check_cpp_style.py) (documented in
+[check_cpp_style.py.md](scripts/check_cpp_style.py.md)), wired into the Claude Code PostToolUse
+and Stop hooks by [.claude/settings.json](.claude/settings.json) — it blocks a turn on tab
+indentation, a header missing `#pragma once`, or `using namespace` in a header. Run it manually
+with `python scripts/check_cpp_style.py --check`. Together these enforce layout, a slice of
+semantics, and three mechanical rules; naming, single-responsibility, ownership, and hot-path
+discipline are enforced by reading the guide (and its always-on rules in [CLAUDE.md](CLAUDE.md) /
+[.agents/rules/cpp-style.md](.agents/rules/cpp-style.md)), not by any tool.
+
 ## Notes
 
 - `-march=native` bakes in **this** CPU's ISA — the binary may `SIGILL` on older
