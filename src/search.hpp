@@ -10,25 +10,36 @@ class TranspositionTable;
 
 // Everything the UCI `go` command can specify.
 struct Limits {
-    int     depth     = 0;   // fixed depth (0 = no depth cap)
-    int64_t movetime  = 0;   // exact ms for this move (0 = none)
-    int64_t nodes     = 0;   // node cap (0 = none)
+    int     depth    = 0;                             // fixed depth (0 = no depth cap)
+    int64_t movetime = 0;                             // exact ms for this move (0 = none)
+    int64_t nodes    = 0;                             // node cap (0 = none)
     int64_t wtime = 0, btime = 0, winc = 0, binc = 0; // ms on the clocks
     int     movestogo = 0;
     bool    infinite  = false;
 };
 
-// Tunable time-management parameters (Phase 1a step 2). Scales are in permille
-// (parts per 1000) of the base per-move slice, so they can be exposed as integer
-// UCI spin options and A/B-tuned by self-play without a rebuild:
+// Self-play-tunable engine knobs. Held per-search and copied into each Searcher, so
+// they can be A/B-tuned by self-play (SPSA) through UCI spin options without a
+// rebuild. Grouped by subsystem.
+//
+// Time management — scales are in permille (parts per 1000) of the base per-move
+// slice `base = remaining/movestogo + inc/2`:
 //   soft = base * softPermille / 1000   (don't *start* a new ID iteration past it)
 //   hard = base * hardPermille / 1000   (abort the search mid-iteration)
-// `assumedMovestogo` is the horizon used when the GUI sends sudden death (no
-// `movestogo`); an explicit `movestogo` always wins.
-struct TimeConfig {
-    int softPermille     = 600;    // normal stop ~= 0.6 of the base slice
-    int hardPermille     = 2400;   // safety abort ~= 4x the soft limit
-    int assumedMovestogo = 30;
+// `assumedMovestogo` is the horizon used under sudden death (no `movestogo`); an
+// explicit `movestogo` always wins. It divides the clock, so it must stay >= 1.
+struct Tunables {
+    // Time management.
+    int softPermille     = 600;  // normal stop ~= 0.6 of the base slice
+    int hardPermille     = 2400; // safety abort ~= 4x the soft limit
+    int assumedMovestogo = 30;   // assumed moves-to-go under sudden death (>= 1)
+
+    // Evaluation.
+    Value tempo = 10; // side-to-move bonus (centipawns)
+
+    // Quiescence delta pruning.
+    Value deltaMargin   = 200; // delta-pruning safety cushion (centipawns)
+    int   endgamePieces = 8;   // total pieces at/below which delta pruning is off
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
@@ -39,14 +50,13 @@ struct TimeConfig {
 // persist across moves and, later, across threads.
 class Searcher {
 public:
-    Searcher(std::atomic<bool>& stopFlag, TranspositionTable& tt, TimeConfig tc = {})
-        : stop_(stopFlag), tt_(tt), tc_(tc) {}
+    Searcher(std::atomic<bool>& stopFlag, TranspositionTable& tt, Tunables tp = {})
+        : stop_(stopFlag), tt_(tt), tp_(tp) {}
 
     // Runs the search on a copy of `board`. Prints `info` lines when
     // `printInfo`, and a final `bestmove` line when `printBest`.
     // Returns the best move found.
-    Move think(Board board, const Limits& limits,
-               bool printBest = true, bool printInfo = true);
+    Move think(Board board, const Limits& limits, bool printBest = true, bool printInfo = true);
 
     uint64_t nodes() const { return nodes_; }
 
@@ -57,15 +67,15 @@ private:
     bool    checkStop();
     int64_t elapsedMs() const;
 
-    std::atomic<bool>& stop_;
+    std::atomic<bool>&  stop_;
     TranspositionTable& tt_;
-    TimeConfig tc_;
-    uint64_t nodes_ = 0;
+    Tunables            tp_;
+    uint64_t            nodes_ = 0;
 
     std::chrono::steady_clock::time_point start_{};
-    int64_t softLimitMs_ = 0;   // don't open a new depth past this (INT64_MAX if none)
-    int64_t hardLimitMs_ = 0;   // abort the search past this (INT64_MAX if none)
-    int64_t nodeLimit_   = 0;   // 0 = none
+    int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)
+    int64_t hardLimitMs_ = 0; // abort the search past this (INT64_MAX if none)
+    int64_t nodeLimit_   = 0; // 0 = none
     bool    useTime_     = false;
     bool    timeUp_      = false;
 

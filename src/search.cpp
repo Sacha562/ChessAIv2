@@ -16,10 +16,8 @@ using namespace chess;
 namespace engine {
 
 namespace {
-constexpr int64_t MOVE_OVERHEAD_MS  = 30;
-constexpr int64_t TIME_CHECK_MASK   = 2047; // check clock every 2048 nodes
-constexpr Value   DELTA_MARGIN      = 200;  // q-search delta-pruning safety cushion
-constexpr int     ENDGAME_PIECES    = 8;    // total pieces at/below which delta is off
+constexpr int64_t MOVE_OVERHEAD_MS = 30;
+constexpr int64_t TIME_CHECK_MASK  = 2047; // check clock every 2048 nodes
 
 // Format a score for a UCI `info ... score` field.
 std::string scoreToUci(Value v) {
@@ -40,9 +38,18 @@ int64_t Searcher::elapsedMs() const {
 }
 
 bool Searcher::checkStop() {
-    if (stop_.load(std::memory_order_relaxed)) { timeUp_ = true; return true; }
-    if (nodeLimit_ && nodes_ >= static_cast<uint64_t>(nodeLimit_)) { timeUp_ = true; return true; }
-    if (useTime_ && elapsedMs() >= hardLimitMs_) { timeUp_ = true; return true; }
+    if (stop_.load(std::memory_order_relaxed)) {
+        timeUp_ = true;
+        return true;
+    }
+    if (nodeLimit_ && nodes_ >= static_cast<uint64_t>(nodeLimit_)) {
+        timeUp_ = true;
+        return true;
+    }
+    if (useTime_ && elapsedMs() >= hardLimitMs_) {
+        timeUp_ = true;
+        return true;
+    }
     return false;
 }
 
@@ -64,27 +71,25 @@ void Searcher::setupTiming(const Limits& limits, const Board& board) {
     }
 
     // A depth/node/infinite search has no clock budget.
-    if (limits.infinite || limits.depth > 0 || limits.nodes > 0)
-        return;
+    if (limits.infinite || limits.depth > 0 || limits.nodes > 0) return;
 
     const bool    white     = (board.sideToMove() == Color::WHITE);
-    const int64_t remaining  = white ? limits.wtime : limits.btime;
-    const int64_t inc        = white ? limits.winc  : limits.binc;
-    if (remaining <= 0)
-        return;   // no clock info -> untimed
+    const int64_t remaining = white ? limits.wtime : limits.btime;
+    const int64_t inc       = white ? limits.winc : limits.binc;
+    if (remaining <= 0) return; // no clock info -> untimed
 
-    useTime_ = true;
-    const int     mtg  = limits.movestogo > 0 ? limits.movestogo : tc_.assumedMovestogo;
+    useTime_           = true;
+    const int     mtg  = limits.movestogo > 0 ? limits.movestogo : tp_.assumedMovestogo;
     const int64_t base = remaining / mtg + inc / 2;
 
-    int64_t soft = base * tc_.softPermille / 1000;
-    int64_t hard = base * tc_.hardPermille / 1000;
+    int64_t soft = base * tp_.softPermille / 1000;
+    int64_t hard = base * tp_.hardPermille / 1000;
 
     // Never flag: cap the hard limit at half the clock (less overhead), then keep
     // the soft limit at or below it.
     const int64_t cap = std::min<int64_t>(remaining / 2, remaining - MOVE_OVERHEAD_MS);
-    hard = std::min(hard, std::max<int64_t>(1, cap));
-    soft = std::min(soft, hard);
+    hard              = std::min(hard, std::max<int64_t>(1, cap));
+    soft              = std::min(soft, hard);
 
     softLimitMs_ = std::max<int64_t>(1, soft);
     hardLimitMs_ = std::max<int64_t>(1, hard);
@@ -103,22 +108,20 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         (board.isHalfMoveDraw() || board.isInsufficientMaterial() || board.isRepetition(1)))
         return VALUE_DRAW;
 
-    if (depth <= 0)
-        return qsearch(board, alpha, beta, ply);   // resolve captures before evaluating
+    if (depth <= 0) return qsearch(board, alpha, beta, ply); // resolve captures before evaluating
 
     const uint64_t key       = board.hash();
     const Value    alphaOrig = alpha;
 
     // Transposition table probe: a deep-enough entry can cut immediately (never at
     // the root, where we must return a move), and its move seeds move ordering.
-    Move ttMove = Move(Move::NO_MOVE);
-    const TTProbe tt = tt_.probe(key);
+    Move          ttMove = Move(Move::NO_MOVE);
+    const TTProbe tt     = tt_.probe(key);
     if (tt.hit) {
         ttMove = tt.move;
         if (ply > 0 && tt.depth >= depth && board.halfMoveClock() < 90) {
             const Value ttv = valueFromTT(tt.value, ply);
-            if (tt.bound == BOUND_EXACT ||
-                (tt.bound == BOUND_LOWER && ttv >= beta) ||
+            if (tt.bound == BOUND_EXACT || (tt.bound == BOUND_LOWER && ttv >= beta) ||
                 (tt.bound == BOUND_UPPER && ttv <= alpha))
                 return ttv;
         }
@@ -127,8 +130,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     Movelist moves;
     movegen::legalmoves(moves, board);
 
-    if (moves.empty())
-        return board.inCheck() ? mated_in(ply) : VALUE_DRAW;
+    if (moves.empty()) return board.inCheck() ? mated_in(ply) : VALUE_DRAW;
 
     // Order: TT move, then winning/equal captures (SEE >= 0, MVV-LVA), quiets, then
     // losing captures (SEE < 0). The single biggest lever on search speed.
@@ -160,7 +162,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 
         board.unmakeMove(m);
 
-        if (timeUp_) return VALUE_ZERO;   // abort: discard partial result (no TT store)
+        if (timeUp_) return VALUE_ZERO; // abort: discard partial result (no TT store)
 
         if (score > best) {
             best     = score;
@@ -168,12 +170,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             if (ply == 0) rootBest_ = m;
         }
         if (score > alpha) alpha = score;
-        if (alpha >= beta) break;         // fail-high cutoff
+        if (alpha >= beta) break; // fail-high cutoff
     }
 
-    const Bound bound = best >= beta         ? BOUND_LOWER
-                      : best > alphaOrig     ? BOUND_EXACT
-                                             : BOUND_UPPER;
+    const Bound bound = best >= beta ? BOUND_LOWER : best > alphaOrig ? BOUND_EXACT : BOUND_UPPER;
     tt_.store(key, depth, valueToTT(best, ply), VALUE_NONE, bestMove, bound);
 
     return best;
@@ -198,20 +198,19 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     // forbidden in check, where the side to move must answer the threat.
     Value best = -VALUE_INFINITE;
     if (!inCheck) {
-        best = evaluate(board);
-        if (best >= beta) return best;   // fail-soft beta cutoff
+        best = evaluate(board, tp_.tempo);
+        if (best >= beta) return best; // fail-soft beta cutoff
         if (best > alpha) alpha = best;
     }
     if (ply >= MAX_PLY - 1)
-        return inCheck ? evaluate(board) : best;   // depth guard: stop descending
+        return inCheck ? evaluate(board, tp_.tempo) : best; // depth guard: stop descending
 
     // In check: search every evasion, ordered like a main node. Otherwise: only
     // captures / capture-promotions, MVV-LVA ordered.
     Movelist moves;
     if (inCheck) {
         movegen::legalmoves(moves, board);
-        if (moves.empty())
-            return mated_in(ply);   // checkmate
+        if (moves.empty()) return mated_in(ply); // checkmate
         orderMoves(board, moves, Move(Move::NO_MOVE));
     } else {
         // Not in check: only captures. An empty list here means "no captures", not
@@ -223,7 +222,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     }
 
     const Value standPat = best;
-    const bool  useDelta = !inCheck && board.occ().count() > ENDGAME_PIECES;
+    const bool  useDelta = !inCheck && board.occ().count() > tp_.endgamePieces;
 
     for (const auto& m : moves) {
         if (!inCheck) {
@@ -231,15 +230,12 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
             // cannot lift stand-pat to alpha, skip it. Off in late endgames, where
             // such material swings decide the game.
             if (useDelta && m.typeOf() != Move::PROMOTION) {
-                const PieceType victim = m.typeOf() == Move::ENPASSANT
-                                           ? PieceType::PAWN
-                                           : board.at<PieceType>(m.to());
-                if (standPat + pieceValue(victim) + DELTA_MARGIN <= alpha)
-                    continue;
+                const PieceType victim =
+                    m.typeOf() == Move::ENPASSANT ? PieceType::PAWN : board.at<PieceType>(m.to());
+                if (standPat + pieceValue(victim) + tp_.deltaMargin <= alpha) continue;
             }
             // SEE pruning: never search a losing capture in quiescence.
-            if (!seeGE(board, m, 0))
-                continue;
+            if (!seeGE(board, m, 0)) continue;
         }
 
         board.makeMove(m);
@@ -251,7 +247,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
         if (score > best) {
             best = score;
             if (score > alpha) alpha = score;
-            if (alpha >= beta) break;   // fail-high cutoff
+            if (alpha >= beta) break; // fail-high cutoff
         }
     }
 
@@ -259,9 +255,9 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
 }
 
 Move Searcher::think(Board board, const Limits& limits, bool printBest, bool printInfo) {
-    start_   = std::chrono::steady_clock::now();
-    nodes_   = 0;
-    timeUp_  = false;
+    start_  = std::chrono::steady_clock::now();
+    nodes_  = 0;
+    timeUp_ = false;
     tt_.newSearch();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
@@ -280,38 +276,32 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     setupTiming(limits, board);
 
     const int maxDepth = (limits.depth > 0) ? limits.depth : MAX_PLY - 1;
-    Value score = VALUE_ZERO;
+    Value     score    = VALUE_ZERO;
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
         rootBest_ = Move(Move::NO_MOVE);
-        Value v = search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0);
+        Value v   = search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0);
 
-        if (timeUp_) break;   // incomplete iteration: keep previous best
+        if (timeUp_) break; // incomplete iteration: keep previous best
 
-        score = v;
+        score              = v;
         rootBestCompleted_ = rootBest_;
 
         if (printInfo) {
-            const int64_t ms = elapsedMs();
+            const int64_t  ms  = elapsedMs();
             const uint64_t nps = ms > 0 ? (nodes_ * 1000ull / static_cast<uint64_t>(ms)) : nodes_;
-            std::cout << "info depth " << depth
-                      << " score " << scoreToUci(score)
-                      << " nodes " << nodes_
-                      << " nps "   << nps
-                      << " hashfull " << tt_.hashfull()
-                      << " time "  << ms
-                      << " pv "    << uci::moveToUci(rootBestCompleted_)
-                      << std::endl;
+            std::cout << "info depth " << depth << " score " << scoreToUci(score) << " nodes "
+                      << nodes_ << " nps " << nps << " hashfull " << tt_.hashfull() << " time "
+                      << ms << " pv " << uci::moveToUci(rootBestCompleted_) << std::endl;
         }
 
         // Soft stop: past the soft budget, a new (more expensive) depth won't
         // finish in time, so stop now and keep this iteration's move.
         if (useTime_ && elapsedMs() >= softLimitMs_) break;
-        if (is_mate(score)) break;   // forced mate found
+        if (is_mate(score)) break; // forced mate found
     }
 
-    if (printBest)
-        std::cout << "bestmove " << uci::moveToUci(rootBestCompleted_) << std::endl;
+    if (printBest) std::cout << "bestmove " << uci::moveToUci(rootBestCompleted_) << std::endl;
     return rootBestCompleted_;
 }
 

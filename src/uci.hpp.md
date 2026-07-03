@@ -45,7 +45,7 @@ and run by [`run_uci`](#run_uci).
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
-| `timeCfg_` | [`TimeConfig`](search.hpp.md#struct-timeconfig) | Live time-management tunables (`TimeSoftPermille` / `TimeHardPermille`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
+| `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
 
 ## Functions
 
@@ -75,17 +75,21 @@ command's `std::istringstream&` (in/out — the stream is consumed).
 ### `Engine::handleGo` (internal)
 
 Parse a `go` command into a [`Limits`](search.hpp.md#struct-limits), snapshot the
-board and the current [`TimeConfig`](search.hpp.md#struct-timeconfig), and launch a
+board and the current [`Tunables`](search.hpp.md#struct-tunables), and launch a
 [`Searcher`](search.hpp.md#class-searcher) — sharing `tt_` by reference — on
 `searchThread_`. The search runs on the snapshot copy so the main thread can keep
 reading input.
 
 ### `Engine::handleSetOption` (internal)
 
-Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` /
-`timeCfg_.softPermille` (`TimeSoftPermille`) / `timeCfg_.hardPermille`
-(`TimeHardPermille`). Setting `Hash` first calls [`stopSearch`](#enginestopsearch)
-(no live search may hold the table) and then
+Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or a
+field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
+`TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
+and `EndgamePieces` — each advertised in the `uci` reply as a `spin` option so a
+self-play tuner (SPSA) can perturb it without a rebuild, and each **clamped to its
+advertised `min`/`max`** on store so an out-of-range value (e.g. a raw spin from a
+tuner) can never reach the search as an out-of-bounds int. Setting `Hash` first calls [`stopSearch`](#enginestopsearch) (no
+live search may hold the table) and then
 [`tt_.resize`](tt.hpp.md#transpositiontableresize). Malformed integer values are
 ignored (caught). Other option names are accepted and ignored for now.
 

@@ -26,10 +26,11 @@ full-window move loop into fail-soft PVS. Aspiration windows
 
 ## Namespace
 
-- Public API (`Limits`, `TimeConfig`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `DELTA_MARGIN`, `ENDGAME_PIECES`, and
-  `scoreToUci` live in an anonymous namespace in `search.cpp` — internal linkage.
-  (`DELTA_MARGIN` / `ENDGAME_PIECES` are the quiescence delta-pruning knobs.)
+- Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, and `scoreToUci` live in an anonymous
+  namespace in `search.cpp` — internal linkage. (The former `DELTA_MARGIN` /
+  `ENDGAME_PIECES` q-search constants are now runtime-tunable fields of
+  [`Tunables`](#struct-tunables).)
 
 ## Objects / Interfaces
 
@@ -51,21 +52,25 @@ Everything a UCI `go` command can specify. Populated by
 
 **Used by:** [`Searcher::think`](#searcherthink), [bench](bench.hpp.md#run)
 
-### `struct TimeConfig`
+### `struct Tunables`
 
-The tunable knobs of the soft/hard time manager, held by a `Searcher` and applied
-by [`setupTiming`](#searchersetuptiming). Held by [uci](uci.hpp.md) and passed to
-each `Searcher` so the two `TimePermille` UCI options can A/B-tune them by self-play
-without a rebuild. Scales are in **permille** (parts per 1000) of the base per-move
-slice `base = remaining/movestogo + inc/2`.
+The self-play-tunable engine knobs, held by a `Searcher` and copied in from
+[uci](uci.hpp.md) so every knob can be A/B-tuned by self-play (SPSA) through UCI spin
+options without a rebuild. Grouped by subsystem: time management (applied by
+[`setupTiming`](#searchersetuptiming)), evaluation, and q-search delta pruning. Time
+scales are in **permille** (parts per 1000) of the base per-move slice
+`base = remaining/movestogo + inc/2`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `softPermille` | `int` | `600` | Soft limit = `base * softPermille / 1000`. Past it, no new ID iteration is started. |
 | `hardPermille` | `int` | `2400` | Hard limit = `base * hardPermille / 1000`. Past it, the search aborts mid-iteration. |
-| `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. |
+| `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. Divides the clock, so it must stay `>= 1`. |
+| `tempo` | `Value` | `10` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
+| `deltaMargin` | `Value` | `200` | Q-search delta-pruning safety cushion (cp). |
+| `endgamePieces` | `int` | `8` | Total piece count at/below which delta pruning switches off. |
 
-**Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [uci](uci.hpp.md#enginehandlesetoption)
+**Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 
 ### `class Searcher`
 
@@ -73,14 +78,14 @@ One search worker: one instance per search. Constructed with a shared atomic sto
 flag (so the [uci](uci.hpp.md) thread can abort it mid-search), a
 [`TranspositionTable&`](tt.hpp.md#class-transpositiontable) it shares with the owner
 (so results persist across moves and, later, across threads), and an optional
-[`TimeConfig`](#struct-timeconfig) (defaulted for untimed callers like
-[bench](bench.hpp.md)).
+[`Tunables`](#struct-tunables) (defaulted for callers like [bench](bench.hpp.md) that
+just want the defaults).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `stop_` | `std::atomic<bool>&` | Shared abort flag; set by the UCI thread to stop the search. |
 | `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
-| `tc_` | `TimeConfig` | Time-management tunables for this search. |
+| `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
 | `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
@@ -218,17 +223,17 @@ uses **no TT** of its own.
 when aborting (`timeUp_`).
 
 **Behavior:**
-- **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate) seeds `best`
-  as a lower bound — return immediately on `best >= beta`, else raise `alpha`. When
+- **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`
+  seeds `best` as a lower bound — return immediately on `best >= beta`, else raise `alpha`. When
   **in check**, standing pat is forbidden: `best` starts at `-∞` and every legal
   evasion is searched (`orderMoves`), so a genuine checkmate scores `mated_in(ply)`.
 - **Move set**: not in check → captures / capture-promotions only
   (`legalmoves<CAPTURE>`), [`orderCaptures`](movepick.hpp.md#ordercaptures) by MVV-LVA.
 - **SEE pruning**: a capture with [`seeGE`](see.hpp.md#seege)`(m, 0) == false` (a losing
   exchange) is skipped — the single biggest q-search node reducer.
-- **Delta pruning**: skip a capture when `standPat + pieceValue(victim) + DELTA_MARGIN
+- **Delta pruning**: skip a capture when `standPat + pieceValue(victim) + tp_.deltaMargin
   <= alpha` — it cannot lift the score to `alpha`. Disabled when in check, for
-  promotions, and in late endgames (`board.occ().count() <= ENDGAME_PIECES`), where
+  promotions, and in late endgames (`board.occ().count() <= tp_.endgamePieces`), where
   material swings decide the game.
 - **Depth guard**: returns the static eval at `ply >= MAX_PLY - 1` so a long checking
   sequence cannot overflow the ply budget.
@@ -250,13 +255,13 @@ q-search results are recomputed each visit (a future optimization).
 ### `Searcher::setupTiming` (private)
 
 Derive `nodeLimit_`, `useTime_`, `softLimitMs_`, and `hardLimitMs_` for one `go`,
-from the [`Limits`](#struct-limits), the side to move, and [`tc_`](#struct-timeconfig).
+from the [`Limits`](#struct-limits), the side to move, and [`tp_`](#struct-tunables).
 Called once at the top of [`think`](#searcherthink).
 
 - **`movetime`**: soft = hard = `movetime − MOVE_OVERHEAD_MS` (spend it exactly).
 - **depth / nodes / infinite**: no clock (`useTime_` stays false; runs untimed).
 - **clock (`wtime`/`btime`…)**: `base = remaining/movestogo + inc/2` (movestogo
-  defaults to `tc_.assumedMovestogo`), then soft/hard scale off `base` by permille.
+  defaults to `tp_.assumedMovestogo`), then soft/hard scale off `base` by permille.
   The hard limit is capped at half the remaining clock (minus overhead) so the
   engine never flags, and soft is clamped to ≤ hard.
 

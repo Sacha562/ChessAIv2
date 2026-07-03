@@ -5,6 +5,7 @@
 #include "perft.hpp"
 #include "chess.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <iostream>
 #include <sstream>
@@ -33,25 +34,25 @@ private:
     void handleSetOption(std::istringstream& is);
     void stopSearch();
 
-    Board board_;
+    Board             board_;
     std::atomic<bool> stop_{false};
-    std::thread searchThread_;
+    std::thread       searchThread_;
 
     // Shared transposition table (persists across moves); sized by the Hash option.
     TranspositionTable tt_{16};
 
     // Options.
     int hashMb_  = 16;
-    int threads_ = 1;   // accepted now, wired to Lazy SMP in Phase 1d.
+    int threads_ = 1; // accepted now, wired to Lazy SMP in Phase 1d.
 
-    // Time-management tunables, live per-search (Phase 1a step 2).
-    TimeConfig timeCfg_{};
+    // Self-play-tunable knobs (time management, eval tempo, q-search delta),
+    // copied into each Searcher so they can be A/B-tuned live via UCI options.
+    Tunables tunables_{};
 };
 
 void Engine::stopSearch() {
     stop_.store(true);
-    if (searchThread_.joinable())
-        searchThread_.join();
+    if (searchThread_.joinable()) searchThread_.join();
     stop_.store(false);
 }
 
@@ -62,12 +63,12 @@ void Engine::handlePosition(std::istringstream& is) {
     std::string fen;
     if (token == "startpos") {
         fen = constants::STARTPOS;
-        is >> token;                      // consume "moves" if present
+        is >> token; // consume "moves" if present
     } else if (token == "fen") {
         while (is >> token && token != "moves")
             fen += token + ' ';
     } else {
-        return;                           // malformed
+        return; // malformed
     }
 
     board_ = Board(fen);
@@ -76,66 +77,88 @@ void Engine::handlePosition(std::istringstream& is) {
         std::string mv;
         while (is >> mv) {
             Move m = uci::uciToMove(board_, mv);
-            if (m == Move(Move::NO_MOVE)) break;   // stop on a malformed/illegal token
+            if (m == Move(Move::NO_MOVE)) break; // stop on a malformed/illegal token
             board_.makeMove(m);
         }
     }
 }
 
 void Engine::handleGo(std::istringstream& is) {
-    Limits limits;
+    Limits      limits;
     std::string token;
     while (is >> token) {
-        if      (token == "depth")     is >> limits.depth;
-        else if (token == "movetime")  is >> limits.movetime;
-        else if (token == "nodes")     is >> limits.nodes;
-        else if (token == "wtime")     is >> limits.wtime;
-        else if (token == "btime")     is >> limits.btime;
-        else if (token == "winc")      is >> limits.winc;
-        else if (token == "binc")      is >> limits.binc;
-        else if (token == "movestogo") is >> limits.movestogo;
-        else if (token == "infinite")  limits.infinite = true;
+        if (token == "depth")
+            is >> limits.depth;
+        else if (token == "movetime")
+            is >> limits.movetime;
+        else if (token == "nodes")
+            is >> limits.nodes;
+        else if (token == "wtime")
+            is >> limits.wtime;
+        else if (token == "btime")
+            is >> limits.btime;
+        else if (token == "winc")
+            is >> limits.winc;
+        else if (token == "binc")
+            is >> limits.binc;
+        else if (token == "movestogo")
+            is >> limits.movestogo;
+        else if (token == "infinite")
+            limits.infinite = true;
     }
 
     stop_.store(false);
-    Board snapshot = board_;              // search on a copy
-    const TimeConfig tc = timeCfg_;
-    searchThread_ = std::thread([this, snapshot, limits, tc]() mutable {
-        Searcher searcher(stop_, tt_, tc);
+    Board          snapshot = board_; // search on a copy
+    const Tunables tp       = tunables_;
+    searchThread_           = std::thread([this, snapshot, limits, tp]() mutable {
+        Searcher searcher(stop_, tt_, tp);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
     });
 }
 
 void Engine::handleSetOption(std::istringstream& is) {
     std::string token, name, value;
-    is >> token;                          // "name"
+    is >> token; // "name"
     while (is >> token && token != "value") {
         if (!name.empty()) name += ' ';
         name += token;
     }
-    if (token == "value")
-        std::getline(is >> std::ws, value);
+    if (token == "value") std::getline(is >> std::ws, value);
 
     try {
         if (name == "Hash" && !value.empty()) {
             hashMb_ = std::stoi(value);
-            stopSearch();                                 // no live search may hold the table
+            stopSearch(); // no live search may hold the table
             tt_.resize(static_cast<size_t>(hashMb_));
         } else if (name == "Threads" && !value.empty()) {
             threads_ = std::stoi(value);
-        } else if (name == "TimeSoftPermille" && !value.empty()) {
-            timeCfg_.softPermille = std::stoi(value);
-        } else if (name == "TimeHardPermille" && !value.empty()) {
-            timeCfg_.hardPermille = std::stoi(value);
         }
-    } catch (...) { /* ignore malformed values */ }
+        // Tunable spin options: clamp each to its advertised UCI min/max, so an
+        // out-of-range value (from a GUI or an SPSA tuner sending raw spins) can never
+        // reach the search as an out-of-bounds int (e.g. an overflowing `tempo` in the
+        // eval sum). Keep these ranges in sync with the `option` strings in `loop`.
+        else if (name == "TimeSoftPermille" && !value.empty()) {
+            tunables_.softPermille = std::clamp(std::stoi(value), 1, 100000);
+        } else if (name == "TimeHardPermille" && !value.empty()) {
+            tunables_.hardPermille = std::clamp(std::stoi(value), 1, 100000);
+        } else if (name == "AssumedMovestogo" && !value.empty()) {
+            tunables_.assumedMovestogo = std::clamp(std::stoi(value), 1, 300);
+        } else if (name == "Tempo" && !value.empty()) {
+            tunables_.tempo = std::clamp(std::stoi(value), 0, 100);
+        } else if (name == "DeltaMargin" && !value.empty()) {
+            tunables_.deltaMargin = std::clamp(std::stoi(value), 0, 1000);
+        } else if (name == "EndgamePieces" && !value.empty()) {
+            tunables_.endgamePieces = std::clamp(std::stoi(value), 0, 32);
+        }
+    } catch (...) { /* ignore malformed values */
+    }
 }
 
 void Engine::loop() {
     std::string line;
     while (std::getline(std::cin, line)) {
         std::istringstream is(line);
-        std::string token;
+        std::string        token;
         is >> token;
 
         if (token == "uci") {
@@ -145,6 +168,10 @@ void Engine::loop() {
                       << "option name Threads type spin default 1 min 1 max 1024\n"
                       << "option name TimeSoftPermille type spin default 600 min 1 max 100000\n"
                       << "option name TimeHardPermille type spin default 2400 min 1 max 100000\n"
+                      << "option name AssumedMovestogo type spin default 30 min 1 max 300\n"
+                      << "option name Tempo type spin default 10 min 0 max 100\n"
+                      << "option name DeltaMargin type spin default 200 min 0 max 1000\n"
+                      << "option name EndgamePieces type spin default 8 min 0 max 32\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;
@@ -174,7 +201,7 @@ void Engine::loop() {
                 Perft::test();
             } else {
                 int d = 1;
-                if (!arg.empty()) std::istringstream(arg) >> d;   // no-throw parse
+                if (!arg.empty()) std::istringstream(arg) >> d; // no-throw parse
                 Perft::divide(board_, d);
             }
         } else if (token == "bench") {
