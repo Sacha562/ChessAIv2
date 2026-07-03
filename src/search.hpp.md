@@ -1,13 +1,15 @@
 # Module: `search`
 
-The search core: iterative deepening over a plain full-window alpha-beta negamax.
-It walks the game tree, calls [`evaluate`](eval.hpp.md#evaluate) at leaves, streams
-UCI `info` lines, and returns the best root move. Driven by [uci](uci.hpp.md) (for
-live play) and [bench](bench.hpp.md) (for the deterministic benchmark).
+The search core: iterative deepening over a fail-soft, full-window alpha-beta
+negamax with soft/hard time management. It walks the game tree, calls
+[`evaluate`](eval.hpp.md#evaluate) at leaves, streams UCI `info` lines, and returns
+the best root move. Driven by [uci](uci.hpp.md) (for live play) and
+[bench](bench.hpp.md) (for the deterministic benchmark).
 
-Phase 0 is deliberately minimal — full-window alpha-beta, static leaf eval, basic
-time management. Transposition table, quiescence + SEE, PVS, move ordering, and the
-pruning stack arrive in Phases 1a–1b (see [PLAN.md](../PLAN.md) Parts 2–4).
+The evaluation is still static material only. Transposition table, quiescence +
+SEE, PVS, move ordering, and the pruning stack arrive later in Phases 1a–1b (see
+[PLAN.md](../PLAN.md) Parts 2–4). **Phase 1a step 2** added the soft/hard time
+manager below (replacing the earlier single half-budget stop).
 
 ## Source Files
 
@@ -16,7 +18,7 @@ pruning stack arrive in Phases 1a–1b (see [PLAN.md](../PLAN.md) Parts 2–4).
 
 ## Namespace
 
-- Public API (`Limits`, `Searcher`) in namespace `engine`.
+- Public API (`Limits`, `TimeConfig`, `Searcher`) in namespace `engine`.
 - `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, and `scoreToUci` live in an anonymous
   namespace in `search.cpp` — internal linkage.
 
@@ -40,24 +42,44 @@ Everything a UCI `go` command can specify. Populated by
 
 **Used by:** [`Searcher::think`](#searcherthink), [bench](bench.hpp.md#run)
 
+### `struct TimeConfig`
+
+The tunable knobs of the soft/hard time manager, held by a `Searcher` and applied
+by [`setupTiming`](#searchersetuptiming). Held by [uci](uci.hpp.md) and passed to
+each `Searcher` so the two `TimePermille` UCI options can A/B-tune them by self-play
+without a rebuild. Scales are in **permille** (parts per 1000) of the base per-move
+slice `base = remaining/movestogo + inc/2`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `softPermille` | `int` | `600` | Soft limit = `base * softPermille / 1000`. Past it, no new ID iteration is started. |
+| `hardPermille` | `int` | `2400` | Hard limit = `base * hardPermille / 1000`. Past it, the search aborts mid-iteration. |
+| `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. |
+
+**Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [uci](uci.hpp.md#enginehandlesetoption)
+
 ### `class Searcher`
 
 One search worker: one instance per search. Constructed with a shared atomic stop
-flag so the [uci](uci.hpp.md) thread can abort it mid-search.
+flag (so the [uci](uci.hpp.md) thread can abort it mid-search) and an optional
+[`TimeConfig`](#struct-timeconfig) (defaulted for untimed callers like
+[bench](bench.hpp.md)).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `stop_` | `std::atomic<bool>&` | Shared abort flag; set by the UCI thread to stop the search. |
+| `tc_` | `TimeConfig` | Time-management tunables for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
-| `allocatedMs_` | `int64_t` | Hard time budget in ms (`INT64_MAX` if untimed). |
+| `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
+| `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
 | `nodeLimit_` | `int64_t` | Node cap; `0` = none. |
 | `useTime_` | `bool` | Whether a wall-clock budget applies. |
 | `timeUp_` | `bool` | Set once the search must abort; unwinds the recursion. |
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -88,7 +110,8 @@ all timing/node/root-move members. Reads the shared `stop_` flag.
 **Warnings:** the first legal move is stored as a fallback **before** searching, so
 `think` never returns a null move in a non-terminal position even if aborted at
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
-stands). Soft stop: a new depth is not started once past half the time budget.
+stands). Soft stop: once elapsed time reaches [`softLimitMs_`](#class-searcher) no
+new depth is started; the current depth may still run until the hard limit.
 
 ### `Searcher::nodes`
 
@@ -120,11 +143,24 @@ always returned. Uses `isRepetition(1)` (twofold) as the in-search draw rule —
 library's default is threefold. On abort, partial results are discarded by the
 caller.
 
+### `Searcher::setupTiming` (private)
+
+Derive `nodeLimit_`, `useTime_`, `softLimitMs_`, and `hardLimitMs_` for one `go`,
+from the [`Limits`](#struct-limits), the side to move, and [`tc_`](#struct-timeconfig).
+Called once at the top of [`think`](#searcherthink).
+
+- **`movetime`**: soft = hard = `movetime − MOVE_OVERHEAD_MS` (spend it exactly).
+- **depth / nodes / infinite**: no clock (`useTime_` stays false; runs untimed).
+- **clock (`wtime`/`btime`…)**: `base = remaining/movestogo + inc/2` (movestogo
+  defaults to `tc_.assumedMovestogo`), then soft/hard scale off `base` by permille.
+  The hard limit is capped at half the remaining clock (minus overhead) so the
+  engine never flags, and soft is clamped to ≤ hard.
+
 ### `Searcher::checkStop` (private)
 
 Return `true` and set `timeUp_` if the search must stop: the shared `stop_` flag is
-set, the node cap is reached, or the time budget is exhausted. Called every 2048
-nodes (`TIME_CHECK_MASK`) plus at the top of each iteration.
+set, the node cap is reached, or the **hard** time limit is exhausted. Called every
+2048 nodes (`TIME_CHECK_MASK`) plus at the top of each iteration.
 
 ### `Searcher::elapsedMs` (private)
 

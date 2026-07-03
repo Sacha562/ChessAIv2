@@ -44,6 +44,7 @@ and run by [`run_uci`](#run_uci).
 | `searchThread_` | `std::thread` | Background thread running the current search. |
 | `hashMb_` | `int` | `Hash` option (MB); accepted now, wired to the TT in Phase 1a. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
+| `timeCfg_` | [`TimeConfig`](search.hpp.md#struct-timeconfig) | Live time-management tunables (`TimeSoftPermille` / `TimeHardPermille`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
 
 ## Functions
 
@@ -73,14 +74,16 @@ command's `std::istringstream&` (in/out — the stream is consumed).
 ### `Engine::handleGo` (internal)
 
 Parse a `go` command into a [`Limits`](search.hpp.md#struct-limits), snapshot the
-board, and launch a [`Searcher`](search.hpp.md#class-searcher) on `searchThread_`.
-The search runs on the snapshot copy so the main thread can keep reading input.
+board and the current [`TimeConfig`](search.hpp.md#struct-timeconfig), and launch a
+[`Searcher`](search.hpp.md#class-searcher) on `searchThread_`. The search runs on
+the snapshot copy so the main thread can keep reading input.
 
 ### `Engine::handleSetOption` (internal)
 
-Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_`.
-Malformed integer values are ignored (caught). Other option names are accepted and
-ignored for now.
+Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` /
+`timeCfg_.softPermille` (`TimeSoftPermille`) / `timeCfg_.hardPermille`
+(`TimeHardPermille`). Malformed integer values are ignored (caught). Other option
+names are accepted and ignored for now.
 
 ### `Engine::stopSearch` (internal)
 

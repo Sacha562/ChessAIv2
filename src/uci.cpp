@@ -39,6 +39,9 @@ private:
     // Options (accepted now, wired up in later phases).
     int hashMb_  = 16;
     int threads_ = 1;
+
+    // Time-management tunables, live per-search (Phase 1a step 2).
+    TimeConfig timeCfg_{};
 };
 
 void Engine::stopSearch() {
@@ -92,8 +95,9 @@ void Engine::handleGo(std::istringstream& is) {
 
     stop_.store(false);
     Board snapshot = board_;              // search on a copy
-    searchThread_ = std::thread([this, snapshot, limits]() mutable {
-        Searcher searcher(stop_);
+    const TimeConfig tc = timeCfg_;
+    searchThread_ = std::thread([this, snapshot, limits, tc]() mutable {
+        Searcher searcher(stop_, tc);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
     });
 }
@@ -111,6 +115,8 @@ void Engine::handleSetOption(std::istringstream& is) {
     try {
         if (name == "Hash" && !value.empty())    hashMb_  = std::stoi(value);
         else if (name == "Threads" && !value.empty()) threads_ = std::stoi(value);
+        else if (name == "TimeSoftPermille" && !value.empty()) timeCfg_.softPermille = std::stoi(value);
+        else if (name == "TimeHardPermille" && !value.empty()) timeCfg_.hardPermille = std::stoi(value);
     } catch (...) { /* ignore malformed values */ }
 }
 
@@ -126,6 +132,8 @@ void Engine::loop() {
                       << "id author " << ENGINE_AUTHOR << '\n'
                       << "option name Hash type spin default 16 min 1 max 1048576\n"
                       << "option name Threads type spin default 1 min 1 max 1024\n"
+                      << "option name TimeSoftPermille type spin default 600 min 1 max 100000\n"
+                      << "option name TimeHardPermille type spin default 2400 min 1 max 100000\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

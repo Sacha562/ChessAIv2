@@ -15,9 +15,9 @@ clean `clang++` build, deterministic bench, and live UCI play confirmed.
 
 - ✅ Library integration (`include/chess.hpp`, header-only, self-initializing)
 - ✅ UCI protocol (`uci`, `isready`, `ucinewgame`, `position`, `go`, `stop`, `setoption`, `quit`), threaded search so `stop` / `go infinite` work
-- ✅ Iterative deepening + full-window alpha-beta negamax
+- ✅ Iterative deepening + fail-soft, full-window alpha-beta negamax
 - ✅ Material evaluation (side-relative centipawns) with mate-aware scoring
-- ✅ Minimal time management (`movetime`, `wtime/btime/winc/binc/movestogo`, `depth`, `nodes`, `infinite`)
+- ✅ Soft/hard time management (`movetime`, `wtime/btime/winc/binc/movestogo`, `depth`, `nodes`, `infinite`); soft/hard budgets tunable via the `TimeSoftPermille` / `TimeHardPermille` UCI options
 - ✅ `perft` (+ `perft test` correctness suite) and a deterministic `bench` command
 
 Coming next (see `PLAN.md`): transposition table, quiescence + SEE, PVS,

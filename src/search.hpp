@@ -16,12 +16,26 @@ struct Limits {
     bool    infinite  = false;
 };
 
-// A single search worker. Phase 0: iterative deepening over a plain
-// (full-window) alpha-beta negamax. One instance per search; a shared
-// `stop` flag lets the UCI thread abort it.
+// Tunable time-management parameters (Phase 1a step 2). Scales are in permille
+// (parts per 1000) of the base per-move slice, so they can be exposed as integer
+// UCI spin options and A/B-tuned by self-play without a rebuild:
+//   soft = base * softPermille / 1000   (don't *start* a new ID iteration past it)
+//   hard = base * hardPermille / 1000   (abort the search mid-iteration)
+// `assumedMovestogo` is the horizon used when the GUI sends sudden death (no
+// `movestogo`); an explicit `movestogo` always wins.
+struct TimeConfig {
+    int softPermille     = 600;    // normal stop ~= 0.6 of the base slice
+    int hardPermille     = 2400;   // safety abort ~= 4x the soft limit
+    int assumedMovestogo = 30;
+};
+
+// A single search worker. Iterative deepening over a fail-soft (full-window)
+// alpha-beta negamax with soft/hard time management. One instance per search; a
+// shared `stop` flag lets the UCI thread abort it.
 class Searcher {
 public:
-    explicit Searcher(std::atomic<bool>& stopFlag) : stop_(stopFlag) {}
+    explicit Searcher(std::atomic<bool>& stopFlag, TimeConfig tc = {})
+        : stop_(stopFlag), tc_(tc) {}
 
     // Runs the search on a copy of `board`. Prints `info` lines when
     // `printInfo`, and a final `bestmove` line when `printBest`.
@@ -33,14 +47,17 @@ public:
 
 private:
     Value   search(Board& board, int depth, Value alpha, Value beta, int ply);
+    void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
     int64_t elapsedMs() const;
 
     std::atomic<bool>& stop_;
+    TimeConfig tc_;
     uint64_t nodes_ = 0;
 
     std::chrono::steady_clock::time_point start_{};
-    int64_t allocatedMs_ = 0;   // hard time budget (INT64_MAX if none)
+    int64_t softLimitMs_ = 0;   // don't open a new depth past this (INT64_MAX if none)
+    int64_t hardLimitMs_ = 0;   // abort the search past this (INT64_MAX if none)
     int64_t nodeLimit_   = 0;   // 0 = none
     bool    useTime_     = false;
     bool    timeUp_      = false;

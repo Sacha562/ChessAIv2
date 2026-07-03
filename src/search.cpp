@@ -37,8 +37,52 @@ int64_t Searcher::elapsedMs() const {
 bool Searcher::checkStop() {
     if (stop_.load(std::memory_order_relaxed)) { timeUp_ = true; return true; }
     if (nodeLimit_ && nodes_ >= static_cast<uint64_t>(nodeLimit_)) { timeUp_ = true; return true; }
-    if (useTime_ && elapsedMs() >= allocatedMs_) { timeUp_ = true; return true; }
+    if (useTime_ && elapsedMs() >= hardLimitMs_) { timeUp_ = true; return true; }
     return false;
+}
+
+// Derive the node cap and soft/hard clock budgets for this `go`. Sets `useTime_`
+// only when a wall clock actually governs the move; explicit depth/nodes/infinite
+// searches run untimed.
+void Searcher::setupTiming(const Limits& limits, const Board& board) {
+    nodeLimit_   = limits.nodes;
+    useTime_     = false;
+    softLimitMs_ = std::numeric_limits<int64_t>::max();
+    hardLimitMs_ = std::numeric_limits<int64_t>::max();
+
+    // `movetime`: spend exactly this budget; soft and hard coincide.
+    if (limits.movetime > 0) {
+        useTime_     = true;
+        softLimitMs_ = std::max<int64_t>(1, limits.movetime - MOVE_OVERHEAD_MS);
+        hardLimitMs_ = softLimitMs_;
+        return;
+    }
+
+    // A depth/node/infinite search has no clock budget.
+    if (limits.infinite || limits.depth > 0 || limits.nodes > 0)
+        return;
+
+    const bool    white     = (board.sideToMove() == Color::WHITE);
+    const int64_t remaining  = white ? limits.wtime : limits.btime;
+    const int64_t inc        = white ? limits.winc  : limits.binc;
+    if (remaining <= 0)
+        return;   // no clock info -> untimed
+
+    useTime_ = true;
+    const int     mtg  = limits.movestogo > 0 ? limits.movestogo : tc_.assumedMovestogo;
+    const int64_t base = remaining / mtg + inc / 2;
+
+    int64_t soft = base * tc_.softPermille / 1000;
+    int64_t hard = base * tc_.hardPermille / 1000;
+
+    // Never flag: cap the hard limit at half the clock (less overhead), then keep
+    // the soft limit at or below it.
+    const int64_t cap = std::min<int64_t>(remaining / 2, remaining - MOVE_OVERHEAD_MS);
+    hard = std::min(hard, std::max<int64_t>(1, cap));
+    soft = std::min(soft, hard);
+
+    softLimitMs_ = std::max<int64_t>(1, soft);
+    hardLimitMs_ = std::max<int64_t>(1, hard);
 }
 
 Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply) {
@@ -99,26 +143,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
         rootBestCompleted_ = moves[0];
     }
 
-    // Configure limits.
-    nodeLimit_   = limits.nodes;
-    useTime_     = false;
-    allocatedMs_ = std::numeric_limits<int64_t>::max();
-
-    if (limits.movetime > 0) {
-        useTime_     = true;
-        allocatedMs_ = std::max<int64_t>(1, limits.movetime - MOVE_OVERHEAD_MS);
-    } else if (!limits.infinite && limits.depth == 0 && limits.nodes == 0) {
-        const bool white = (board.sideToMove() == Color::WHITE);
-        const int64_t t   = white ? limits.wtime : limits.btime;
-        const int64_t inc = white ? limits.winc  : limits.binc;
-        if (t > 0) {
-            useTime_ = true;
-            const int mtg = limits.movestogo > 0 ? limits.movestogo : 30;
-            int64_t alloc = t / mtg + inc / 2;
-            alloc = std::min<int64_t>(alloc, t - MOVE_OVERHEAD_MS);
-            allocatedMs_ = std::max<int64_t>(1, alloc);
-        }
-    }
+    setupTiming(limits, board);
 
     const int maxDepth = (limits.depth > 0) ? limits.depth : MAX_PLY - 1;
     Value score = VALUE_ZERO;
@@ -144,8 +169,9 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
                       << std::endl;
         }
 
-        // Soft stop: if over half the time budget is gone, don't open a new depth.
-        if (useTime_ && elapsedMs() * 2 >= allocatedMs_) break;
+        // Soft stop: past the soft budget, a new (more expensive) depth won't
+        // finish in time, so stop now and keep this iteration's move.
+        if (useTime_ && elapsedMs() >= softLimitMs_) break;
         if (is_mate(score)) break;   // forced mate found
     }
 
