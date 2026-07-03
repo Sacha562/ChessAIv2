@@ -19,6 +19,22 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 target_link_libraries(chessai PRIVATE Threads::Threads)
 
+# --- Unit tests (doctest) -------------------------------------------------
+# chessai-tests links every engine source except main.cpp (doctest supplies its
+# own main via tests/test_main.cpp) plus all tests/*.cpp. Run with `ctest` or by
+# executing the binary directly.
+enable_testing()
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
+set(ENGINE_SOURCES ${SOURCES})
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/main\\.cpp$")
+add_executable(chessai-tests ${TEST_SOURCES} ${ENGINE_SOURCES})
+target_include_directories(chessai-tests PRIVATE include src tests)
+target_link_libraries(chessai-tests PRIVATE Threads::Threads)
+if(USE_PEXT)
+    target_compile_definitions(chessai-tests PRIVATE CHESS_USE_PEXT)
+endif()
+add_test(NAME unit COMMAND chessai-tests)
+
 # --- BMI2 PEXT sliding move generation (fast on Zen 3 / modern Intel) ---
 option(USE_PEXT "Use BMI2 PEXT for sliding move generation" ON)
 if(USE_PEXT)

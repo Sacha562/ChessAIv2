@@ -4,6 +4,8 @@
 *.obj
 *.exe
 chessai
+/chessai-tests
+/chessai-gate
 
 # Profiling / PGO
 *.gcda

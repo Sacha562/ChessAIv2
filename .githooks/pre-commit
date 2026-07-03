@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# ChessAIv2 commit gate — blocks the commit unless the full check suite passes.
+#
+# Activate once per clone with:  git config core.hooksPath .githooks
+# The actual checks live in scripts/run_checks.py (documented, runnable by hand):
+# build, unit tests, perft, bench determinism, doc sync, and C++ style.
+set -euo pipefail
+repo_root="$(git rev-parse --show-toplevel)"
+exec python3 "$repo_root/scripts/run_checks.py"

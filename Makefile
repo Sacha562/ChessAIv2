@@ -12,16 +12,31 @@ WARN     := -Wall -Wextra -Wno-unused-parameter
 INCLUDE  := -Iinclude -Isrc
 SOURCES  := $(wildcard src/*.cpp)
 
+# Unit tests: the doctest binary links every engine source EXCEPT main.cpp (doctest
+# supplies its own main) plus everything under tests/. A lighter opt level (no LTO)
+# keeps the edit-build-test loop and the commit gate fast; correctness is unaffected.
+# -Wno-\#warnings silences the <ciso646>-deprecated #warning doctest triggers under
+# a C++20 libstdc++ (the \# escapes make's comment character).
+TESTOPT     := -O1 -march=native -DNDEBUG
+TESTWARN    := $(WARN) -Wno-\#warnings
+TESTSOURCES := $(wildcard tests/*.cpp) $(filter-out src/main.cpp,$(SOURCES))
+
 ifeq ($(OS),Windows_NT)
     SUFFIX := .exe
 else
     SUFFIX :=
 endif
 EXE ?= chessai$(SUFFIX)
+TESTEXE ?= chessai-tests$(SUFFIX)
 
-.PHONY: all clean
+.PHONY: all test clean
 all:
 	$(CXX) $(CXXSTD) $(OPT) $(DEFS) $(WARN) $(INCLUDE) $(SOURCES) -pthread -o $(EXE)
 
+# Build and run the unit tests (exit non-zero on any failing case).
+test:
+	$(CXX) $(CXXSTD) $(TESTOPT) $(DEFS) $(TESTWARN) $(INCLUDE) $(TESTSOURCES) -pthread -o $(TESTEXE)
+	./$(TESTEXE)
+
 clean:
-	-rm -f chessai chessai.exe
+	-rm -f chessai chessai.exe chessai-tests chessai-tests.exe

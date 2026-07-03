@@ -81,6 +81,40 @@ unsigned binary — hence WSL2 for actually executing it.
 See [main.cpp.md](src/main.cpp.md) for dispatch and [README.md](README.md) for the
 full command list.
 
+## Unit tests
+
+Unit tests use **doctest** (single-header, vendored at `include/doctest.h` — third
+party, treated like `chess.hpp` and not documented). The test binary
+**`chessai-tests`** links every engine source *except* `src/main.cpp` (doctest
+provides its own `main`) plus all of `tests/*.cpp`, so any module can be tested
+without touching the runner ([tests/test_main.cpp.md](tests/test_main.cpp.md)).
+
+```bash
+make test            # Makefile: compile chessai-tests (fast -O1, no LTO) and run it
+ctest --test-dir build --output-on-failure   # CMake: same binary via the `unit` test
+```
+
+Both build paths stay in sync (Makefile `test` target ↔ CMake `chessai-tests` target
++ `enable_testing`). The lighter `-O1` opt level keeps the loop fast; correctness and
+node signatures are independent of it. `-Wno-\#warnings` silences a `<ciso646>`
+`#warning` doctest triggers under a C++20 libstdc++. Test docs live next to the code
+([tests/test_tt.cpp.md](tests/test_tt.cpp.md)) per
+[documentation-style-guide.md §4.2](documentation-style-guide.md#42-test-files).
+
+## Commit gate
+
+`git commit` is gated: [`.githooks/pre-commit`](.githooks/pre-commit) runs
+[`scripts/run_checks.py`](scripts/run_checks.py.md), which must pass **build + unit
+tests + perft + bench determinism + doc sync + C++ style** or the commit is blocked.
+Activate it once per clone (it is a repo config, not committed):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Because the gate builds and runs the engine, commit from the WSL2 toolchain. Run it
+by hand any time with `python3 scripts/run_checks.py`.
+
 ## Code Style & Formatting
 
 C++ style is governed by [cpp-style-guide.md](cpp-style-guide.md). Its formatting half is
