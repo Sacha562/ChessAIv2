@@ -1,5 +1,7 @@
 #include "search.hpp"
 #include "eval.hpp"
+#include "movepick.hpp"
+#include "see.hpp"
 #include "tt.hpp"
 #include "chess.hpp"
 
@@ -16,6 +18,8 @@ namespace engine {
 namespace {
 constexpr int64_t MOVE_OVERHEAD_MS  = 30;
 constexpr int64_t TIME_CHECK_MASK   = 2047; // check clock every 2048 nodes
+constexpr Value   DELTA_MARGIN      = 200;  // q-search delta-pruning safety cushion
+constexpr int     ENDGAME_PIECES    = 8;    // total pieces at/below which delta is off
 
 // Format a score for a UCI `info ... score` field.
 std::string scoreToUci(Value v) {
@@ -100,7 +104,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         return VALUE_DRAW;
 
     if (depth <= 0)
-        return evaluate(board);   // static leaf. Quiescence arrives in Phase 1a step 5.
+        return qsearch(board, alpha, beta, ply);   // resolve captures before evaluating
 
     const uint64_t key       = board.hash();
     const Value    alphaOrig = alpha;
@@ -126,12 +130,9 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     if (moves.empty())
         return board.inCheck() ? mated_in(ply) : VALUE_DRAW;
 
-    // TT move first — the strongest ordering signal (the rest of the ordering stack
-    // arrives in Phase 1a step 6).
-    if (ttMove != Move(Move::NO_MOVE)) {
-        for (int i = 0; i < moves.size(); ++i)
-            if (moves[i] == ttMove) { std::swap(moves[0], moves[i]); break; }
-    }
+    // Order: TT move, then winning/equal captures (SEE >= 0, MVV-LVA), quiets, then
+    // losing captures (SEE < 0). The single biggest lever on search speed.
+    orderMoves(board, moves, ttMove);
 
     Value best     = -VALUE_INFINITE;
     Move  bestMove = Move(Move::NO_MOVE);
@@ -156,6 +157,85 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
                       : best > alphaOrig     ? BOUND_EXACT
                                              : BOUND_UPPER;
     tt_.store(key, depth, valueToTT(best, ply), VALUE_NONE, bestMove, bound);
+
+    return best;
+}
+
+// Quiescence search: at the horizon, keep resolving captures (and, when in check,
+// all evasions) until the position is quiet, so the static eval is never read in the
+// middle of a capture sequence (the horizon effect). Fail-soft; no TT of its own.
+Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
+    if (timeUp_) return VALUE_ZERO;
+
+    ++nodes_;
+    if ((nodes_ & TIME_CHECK_MASK) == 0) checkStop();
+
+    // Draw detection (always below the root here) — same rule as the main search.
+    if (board.isHalfMoveDraw() || board.isInsufficientMaterial() || board.isRepetition(1))
+        return VALUE_DRAW;
+
+    const bool inCheck = board.inCheck();
+
+    // Stand-pat: the static eval is a lower bound on the score — but standing pat is
+    // forbidden in check, where the side to move must answer the threat.
+    Value best = -VALUE_INFINITE;
+    if (!inCheck) {
+        best = evaluate(board);
+        if (best >= beta) return best;   // fail-soft beta cutoff
+        if (best > alpha) alpha = best;
+    }
+    if (ply >= MAX_PLY - 1)
+        return inCheck ? evaluate(board) : best;   // depth guard: stop descending
+
+    // In check: search every evasion, ordered like a main node. Otherwise: only
+    // captures / capture-promotions, MVV-LVA ordered.
+    Movelist moves;
+    if (inCheck) {
+        movegen::legalmoves(moves, board);
+        if (moves.empty())
+            return mated_in(ply);   // checkmate
+        orderMoves(board, moves, Move(Move::NO_MOVE));
+    } else {
+        // Not in check: only captures. An empty list here means "no captures", not
+        // necessarily "no moves" — so a stalemate is scored as its (quiet) stand-pat
+        // eval rather than a draw. This is the standard quiescence limitation (q-search
+        // never enumerates quiets); the main search catches stalemate at depth > 0.
+        movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
+        orderCaptures(board, moves);
+    }
+
+    const Value standPat = best;
+    const bool  useDelta = !inCheck && board.occ().count() > ENDGAME_PIECES;
+
+    for (const auto& m : moves) {
+        if (!inCheck) {
+            // Delta pruning: if even winning the captured piece (plus a cushion)
+            // cannot lift stand-pat to alpha, skip it. Off in late endgames, where
+            // such material swings decide the game.
+            if (useDelta && m.typeOf() != Move::PROMOTION) {
+                const PieceType victim = m.typeOf() == Move::ENPASSANT
+                                           ? PieceType::PAWN
+                                           : board.at<PieceType>(m.to());
+                if (standPat + pieceValue(victim) + DELTA_MARGIN <= alpha)
+                    continue;
+            }
+            // SEE pruning: never search a losing capture in quiescence.
+            if (!seeGE(board, m, 0))
+                continue;
+        }
+
+        board.makeMove(m);
+        const Value score = -qsearch(board, -beta, -alpha, ply + 1);
+        board.unmakeMove(m);
+
+        if (timeUp_) return VALUE_ZERO;
+
+        if (score > best) {
+            best = score;
+            if (score > alpha) alpha = score;
+            if (alpha >= beta) break;   // fail-high cutoff
+        }
+    }
 
     return best;
 }

@@ -51,6 +51,7 @@ public:
 
 private:
     Value   search(Board& board, int depth, Value alpha, Value beta, int ply);
+    Value   qsearch(Board& board, Value alpha, Value beta, int ply);
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
     int64_t elapsedMs() const;

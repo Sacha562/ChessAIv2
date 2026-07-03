@@ -7,11 +7,14 @@ stores TT entries, streams UCI `info` lines, and returns the best root move. Dri
 by [uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the
 deterministic benchmark).
 
-The evaluation is still static material only. Quiescence + SEE, PVS, the rest of the
-move-ordering stack, and the pruning stack arrive later in Phases 1a–1b (see
+The evaluation is still static material only. PVS, the pruning stack, and the rest of
+the move-ordering stack (killers, history) arrive later in Phases 1a–1b (see
 [PLAN.md](../PLAN.md) Parts 2–4). **Phase 1a step 2** added the soft/hard time
-manager; **step 3** added the [`TranspositionTable`](tt.hpp.md) probe/cutoff, TT-move
-ordering, and store described under [`search`](#searchersearch).
+manager; **step 3** added the [`TranspositionTable`](tt.hpp.md) probe/cutoff and
+store; **step 4** added [`see`](see.hpp.md) (Static Exchange Evaluation); **step 5**
+added the [`qsearch`](#searcherqsearch) quiescence layer at the leaf; and **step 6**
+replaced the TT-move-only ordering with full [`movepick`](movepick.hpp.md) ordering
+(TT move → good captures → quiets → losing captures).
 
 ## Source Files
 
@@ -21,8 +24,9 @@ ordering, and store described under [`search`](#searchersearch).
 ## Namespace
 
 - Public API (`Limits`, `TimeConfig`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, and `scoreToUci` live in an anonymous
-  namespace in `search.cpp` — internal linkage.
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `DELTA_MARGIN`, `ENDGAME_PIECES`, and
+  `scoreToUci` live in an anonymous namespace in `search.cpp` — internal linkage.
+  (`DELTA_MARGIN` / `ENDGAME_PIECES` are the quiescence delta-pruning knobs.)
 
 ## Objects / Interfaces
 
@@ -84,7 +88,7 @@ flag (so the [uci](uci.hpp.md) thread can abort it mid-search), a
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -129,14 +133,15 @@ Return `uint64_t` — nodes visited in the current/last search. Read by
 ### `Searcher::search` (private)
 
 The recursive fail-soft negamax (returns `best`, full window). Order of operations:
-draw check → **TT probe** → leaf/movegen → **TT-move-first ordering** → move loop →
+draw check → **leaf → [`qsearch`](#searcherqsearch)** (when `depth <= 0`) → **TT
+probe** → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)** → move loop →
 **TT store**.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `board` | `Board&` | Current position; mutated via make/unmake and restored before return (in/out). |
-| `depth` | `int` | Remaining depth in plies; `<= 0` returns the static eval. |
+| `depth` | `int` | Remaining depth in plies; `<= 0` drops into [`qsearch`](#searcherqsearch). |
 | `alpha` | `Value` | Lower bound of the search window. |
 | `beta` | `Value` | Upper bound of the search window. |
 | `ply` | `int` | Distance from the root (for mate scoring and root-move tracking). |
@@ -152,8 +157,9 @@ when aborting (`timeUp_`).
   `EXACT` always, `LOWER` when `ttv >= beta`, `UPPER` when `ttv <= alpha`, where
   `ttv = valueFromTT(entry.value, ply)`. **Never cuts at the root** so a move is
   always produced.
-- **Ordering**: the TT move (if any) is swapped to the front of the move list — the
-  only ordering signal until Phase 1a step 6.
+- **Ordering**: the probed TT move is passed to
+  [`orderMoves`](movepick.hpp.md#ordermoves), which floats it first and then sorts the
+  remaining moves (good captures by SEE+MVV-LVA, quiets, losing captures).
 - **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the
   best move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`,
   else `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`.
@@ -168,6 +174,56 @@ library's default is threefold. On abort, partial results are discarded and **no
 stored in the TT. A stale/illegal TT move from a key collision is harmless: it is
 only searched if it matches a generated legal move (the swap is a no-op otherwise).
 Mate scores are rebased through the TT via [`valueToTT`/`valueFromTT`](tt.hpp.md#valuetott--valuefromtt).
+
+### `Searcher::qsearch` (private)
+
+Quiescence search: the leaf layer reached when the main search hits `depth <= 0`. It
+keeps resolving **captures** (and, when in check, **all evasions**) until the position
+is quiet, so the static eval is never read in the middle of a capture sequence (the
+horizon effect). Fail-soft, full window; it keeps its own node/time accounting but
+uses **no TT** of its own.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `board` | `Board&` | Current position; mutated via make/unmake and restored (in/out). |
+| `alpha` | `Value` | Lower bound of the window. |
+| `beta` | `Value` | Upper bound of the window. |
+| `ply` | `int` | Distance from the root (mate scoring, depth guard). |
+
+**Returns:** [`Value`](types.hpp.md#using-value--int) — the fail-soft quiescence score.
+`mated_in(ply)` when in check with no evasions; `VALUE_DRAW` on a draw; `VALUE_ZERO`
+when aborting (`timeUp_`).
+
+**Behavior:**
+- **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate) seeds `best`
+  as a lower bound — return immediately on `best >= beta`, else raise `alpha`. When
+  **in check**, standing pat is forbidden: `best` starts at `-∞` and every legal
+  evasion is searched (`orderMoves`), so a genuine checkmate scores `mated_in(ply)`.
+- **Move set**: not in check → captures / capture-promotions only
+  (`legalmoves<CAPTURE>`), [`orderCaptures`](movepick.hpp.md#ordercaptures) by MVV-LVA.
+- **SEE pruning**: a capture with [`seeGE`](see.hpp.md#seege)`(m, 0) == false` (a losing
+  exchange) is skipped — the single biggest q-search node reducer.
+- **Delta pruning**: skip a capture when `standPat + pieceValue(victim) + DELTA_MARGIN
+  <= alpha` — it cannot lift the score to `alpha`. Disabled when in check, for
+  promotions, and in late endgames (`board.occ().count() <= ENDGAME_PIECES`), where
+  material swings decide the game.
+- **Depth guard**: returns the static eval at `ply >= MAX_PLY - 1` so a long checking
+  sequence cannot overflow the ply budget.
+
+**Side Effects:** mutates `board` transiently; updates `nodes_`; periodically calls
+`checkStop`. Reads (does not write) the TT via nothing — q-search does not probe or
+store.
+
+**Warnings:** the q-search recurses on captures (and check evasions) only, never on
+quiet checks, so it terminates as material is consumed. Non-capturing (quiet)
+promotions are searched only insofar as `legalmoves<CAPTURE>` yields them; a purely
+quiet queen promotion may be deferred to the main search. **Stalemate is not detected
+when not in check**: an empty capture list means "no captures", not "no moves", so a
+stalemated node returns its stand-pat eval instead of `VALUE_DRAW` — the standard
+quiescence limitation (enumerating quiets would defeat q-search's purpose); the main
+search still scores stalemate correctly at `depth > 0`. There is no TT cutoff here, so
+q-search results are recomputed each visit (a future optimization).
 
 ### `Searcher::setupTiming` (private)
 
