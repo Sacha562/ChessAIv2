@@ -4,6 +4,29 @@
 # Activate once per clone with:  git config core.hooksPath .githooks
 # The actual checks live in scripts/run_checks.py (documented, runnable by hand):
 # build, unit tests, perft, bench determinism, doc sync, and C++ style.
+#
+# The build toolchain (make / clang++) lives in WSL, not on Windows — Smart App
+# Control blocks unsigned self-built .exes (see build.md). The canonical source and
+# git, however, live on Windows. So when this hook fires from Git Bash / MSYS on
+# Windows, it re-invokes the gate inside WSL against the same working tree under
+# /mnt/c (a slower build than the ~/ChessAIv2 sync, but hermetic and correct). On
+# WSL / Linux it runs the gate directly.
 set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
-exec python3 "$repo_root/scripts/run_checks.py"
+
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        if ! command -v wsl >/dev/null 2>&1; then
+            echo "commit gate: WSL not found — the build toolchain lives in WSL; commit from there (see build.md)." >&2
+            exit 1
+        fi
+        wsl_root="$(wsl -e wslpath -a "$repo_root")"
+        exec wsl -e bash -lc "cd \"$wsl_root\" && python3 scripts/run_checks.py"
+        ;;
+esac
+
+# Native POSIX (WSL / Linux): prefer python3, fall back to python.
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$repo_root/scripts/run_checks.py"
+fi
+exec python "$repo_root/scripts/run_checks.py"
