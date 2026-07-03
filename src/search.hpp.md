@@ -1,15 +1,17 @@
 # Module: `search`
 
 The search core: iterative deepening over a fail-soft, full-window alpha-beta
-negamax with soft/hard time management. It walks the game tree, calls
-[`evaluate`](eval.hpp.md#evaluate) at leaves, streams UCI `info` lines, and returns
-the best root move. Driven by [uci](uci.hpp.md) (for live play) and
-[bench](bench.hpp.md) (for the deterministic benchmark).
+negamax with a [transposition table](tt.hpp.md) and soft/hard time management. It
+walks the game tree, calls [`evaluate`](eval.hpp.md#evaluate) at leaves, probes and
+stores TT entries, streams UCI `info` lines, and returns the best root move. Driven
+by [uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the
+deterministic benchmark).
 
-The evaluation is still static material only. Transposition table, quiescence +
-SEE, PVS, move ordering, and the pruning stack arrive later in Phases 1a–1b (see
+The evaluation is still static material only. Quiescence + SEE, PVS, the rest of the
+move-ordering stack, and the pruning stack arrive later in Phases 1a–1b (see
 [PLAN.md](../PLAN.md) Parts 2–4). **Phase 1a step 2** added the soft/hard time
-manager below (replacing the earlier single half-budget stop).
+manager; **step 3** added the [`TranspositionTable`](tt.hpp.md) probe/cutoff, TT-move
+ordering, and store described under [`search`](#searchersearch).
 
 ## Source Files
 
@@ -61,13 +63,16 @@ slice `base = remaining/movestogo + inc/2`.
 ### `class Searcher`
 
 One search worker: one instance per search. Constructed with a shared atomic stop
-flag (so the [uci](uci.hpp.md) thread can abort it mid-search) and an optional
+flag (so the [uci](uci.hpp.md) thread can abort it mid-search), a
+[`TranspositionTable&`](tt.hpp.md#class-transpositiontable) it shares with the owner
+(so results persist across moves and, later, across threads), and an optional
 [`TimeConfig`](#struct-timeconfig) (defaulted for untimed callers like
 [bench](bench.hpp.md)).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `stop_` | `std::atomic<bool>&` | Shared abort flag; set by the UCI thread to stop the search. |
+| `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
 | `tc_` | `TimeConfig` | Time-management tunables for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
@@ -104,8 +109,11 @@ a final `bestmove`.
 **Returns:** `Move` — the best move found (`rootBestCompleted_`). Returns
 `Move::NO_MOVE` and prints `bestmove 0000` when the position has no legal moves.
 
-**Side Effects:** writes to `std::cout` (`info` / `bestmove`); resets and updates
-all timing/node/root-move members. Reads the shared `stop_` flag.
+**Side Effects:** writes to `std::cout` (`info` / `bestmove`, including a
+`hashfull` field from [`tt_.hashfull()`](tt.hpp.md#transpositiontablehashfull));
+calls [`tt_.newSearch()`](tt.hpp.md#transpositiontablenewsearch) once to advance the
+TT generation; resets and updates all timing/node/root-move members. Reads the
+shared `stop_` flag.
 
 **Warnings:** the first legal move is stored as a fallback **before** searching, so
 `think` never returns a null move in a non-terminal position even if aborted at
@@ -120,7 +128,9 @@ Return `uint64_t` — nodes visited in the current/last search. Read by
 
 ### `Searcher::search` (private)
 
-The recursive negamax. Fail-soft in spirit (returns `best`), full-window in Phase 0.
+The recursive fail-soft negamax (returns `best`, full window). Order of operations:
+draw check → **TT probe** → leaf/movegen → **TT-move-first ordering** → move loop →
+**TT store**.
 
 **Parameters:**
 | Name | Type | Description |
@@ -135,13 +145,29 @@ The recursive negamax. Fail-soft in spirit (returns `best`), full-window in Phas
 `board`. `mated_in(ply)` at checkmate, `VALUE_DRAW` at stalemate/draw, `VALUE_ZERO`
 when aborting (`timeUp_`).
 
-**Side Effects:** mutates `board` transiently; updates `nodes_` and, at `ply == 0`,
-`rootBest_`; periodically calls `checkStop`.
+**Transposition table use:**
+- **Probe** at [`board.hash()`](../include/chess.hpp). A hit yields the stored move
+  (used for ordering) and, when `ply > 0`, `entry.depth >= depth`, and the fifty-move
+  clock is low (`halfMoveClock() < 90`), an immediate cutoff if the bound qualifies:
+  `EXACT` always, `LOWER` when `ttv >= beta`, `UPPER` when `ttv <= alpha`, where
+  `ttv = valueFromTT(entry.value, ply)`. **Never cuts at the root** so a move is
+  always produced.
+- **Ordering**: the TT move (if any) is swapped to the front of the move list — the
+  only ordering signal until Phase 1a step 6.
+- **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the
+  best move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`,
+  else `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`.
+- **Prefetch**: `tt_.prefetch(board.zobristAfter(m))` before each `makeMove`.
+
+**Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`
+and, at `ply == 0`, `rootBest_`; periodically calls `checkStop`.
 
 **Warnings:** draw detection is skipped at the root (`ply > 0` guard) so a move is
 always returned. Uses `isRepetition(1)` (twofold) as the in-search draw rule — the
-library's default is threefold. On abort, partial results are discarded by the
-caller.
+library's default is threefold. On abort, partial results are discarded and **not**
+stored in the TT. A stale/illegal TT move from a key collision is harmless: it is
+only searched if it matches a generated legal move (the swap is a no-op otherwise).
+Mate scores are rebased through the TT via [`valueToTT`/`valueFromTT`](tt.hpp.md#valuetott--valuefromtt).
 
 ### `Searcher::setupTiming` (private)
 

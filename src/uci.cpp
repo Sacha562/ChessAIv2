@@ -1,5 +1,6 @@
 #include "uci.hpp"
 #include "search.hpp"
+#include "tt.hpp"
 #include "bench.hpp"
 #include "perft.hpp"
 #include "chess.hpp"
@@ -36,9 +37,12 @@ private:
     std::atomic<bool> stop_{false};
     std::thread searchThread_;
 
-    // Options (accepted now, wired up in later phases).
+    // Shared transposition table (persists across moves); sized by the Hash option.
+    TranspositionTable tt_{16};
+
+    // Options.
     int hashMb_  = 16;
-    int threads_ = 1;
+    int threads_ = 1;   // accepted now, wired to Lazy SMP in Phase 1d.
 
     // Time-management tunables, live per-search (Phase 1a step 2).
     TimeConfig timeCfg_{};
@@ -97,7 +101,7 @@ void Engine::handleGo(std::istringstream& is) {
     Board snapshot = board_;              // search on a copy
     const TimeConfig tc = timeCfg_;
     searchThread_ = std::thread([this, snapshot, limits, tc]() mutable {
-        Searcher searcher(stop_, tc);
+        Searcher searcher(stop_, tt_, tc);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
     });
 }
@@ -113,10 +117,17 @@ void Engine::handleSetOption(std::istringstream& is) {
         std::getline(is >> std::ws, value);
 
     try {
-        if (name == "Hash" && !value.empty())    hashMb_  = std::stoi(value);
-        else if (name == "Threads" && !value.empty()) threads_ = std::stoi(value);
-        else if (name == "TimeSoftPermille" && !value.empty()) timeCfg_.softPermille = std::stoi(value);
-        else if (name == "TimeHardPermille" && !value.empty()) timeCfg_.hardPermille = std::stoi(value);
+        if (name == "Hash" && !value.empty()) {
+            hashMb_ = std::stoi(value);
+            stopSearch();                                 // no live search may hold the table
+            tt_.resize(static_cast<size_t>(hashMb_));
+        } else if (name == "Threads" && !value.empty()) {
+            threads_ = std::stoi(value);
+        } else if (name == "TimeSoftPermille" && !value.empty()) {
+            timeCfg_.softPermille = std::stoi(value);
+        } else if (name == "TimeHardPermille" && !value.empty()) {
+            timeCfg_.hardPermille = std::stoi(value);
+        }
     } catch (...) { /* ignore malformed values */ }
 }
 
@@ -139,6 +150,7 @@ void Engine::loop() {
             std::cout << "readyok" << std::endl;
         } else if (token == "ucinewgame") {
             stopSearch();
+            tt_.clear();
             board_ = Board(constants::STARTPOS);
         } else if (token == "position") {
             stopSearch();

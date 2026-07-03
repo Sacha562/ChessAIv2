@@ -1,5 +1,6 @@
 #include "bench.hpp"
 #include "search.hpp"
+#include "tt.hpp"
 #include "chess.hpp"
 
 #include <atomic>
@@ -36,13 +37,15 @@ void run(int depth) {
     if (depth <= 0) depth = DEFAULT_DEPTH;
 
     std::atomic<bool> stop{false};
+    TranspositionTable tt(16);
     uint64_t totalNodes = 0;
 
     const auto t0 = std::chrono::steady_clock::now();
     int idx = 0;
     for (const char* fen : POSITIONS) {
         Board board(fen);
-        Searcher searcher(stop);
+        tt.clear();                       // per-position clear keeps the count deterministic
+        Searcher searcher(stop, tt);
         Limits limits;
         limits.depth = depth;
         searcher.think(board, limits, /*printBest=*/false, /*printInfo=*/false);

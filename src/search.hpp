@@ -6,6 +6,8 @@
 
 namespace engine {
 
+class TranspositionTable;
+
 // Everything the UCI `go` command can specify.
 struct Limits {
     int     depth     = 0;   // fixed depth (0 = no depth cap)
@@ -30,12 +32,14 @@ struct TimeConfig {
 };
 
 // A single search worker. Iterative deepening over a fail-soft (full-window)
-// alpha-beta negamax with soft/hard time management. One instance per search; a
-// shared `stop` flag lets the UCI thread abort it.
+// alpha-beta negamax with a transposition table and soft/hard time management.
+// One instance per search; the shared `stop` flag lets the UCI thread abort it,
+// and the transposition table is shared (and outlives the searcher) so results
+// persist across moves and, later, across threads.
 class Searcher {
 public:
-    explicit Searcher(std::atomic<bool>& stopFlag, TimeConfig tc = {})
-        : stop_(stopFlag), tc_(tc) {}
+    Searcher(std::atomic<bool>& stopFlag, TranspositionTable& tt, TimeConfig tc = {})
+        : stop_(stopFlag), tt_(tt), tc_(tc) {}
 
     // Runs the search on a copy of `board`. Prints `info` lines when
     // `printInfo`, and a final `bestmove` line when `printBest`.
@@ -52,6 +56,7 @@ private:
     int64_t elapsedMs() const;
 
     std::atomic<bool>& stop_;
+    TranspositionTable& tt_;
     TimeConfig tc_;
     uint64_t nodes_ = 0;
 

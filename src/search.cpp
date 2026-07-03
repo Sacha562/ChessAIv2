@@ -1,5 +1,6 @@
 #include "search.hpp"
 #include "eval.hpp"
+#include "tt.hpp"
 #include "chess.hpp"
 
 #include <algorithm>
@@ -99,7 +100,25 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         return VALUE_DRAW;
 
     if (depth <= 0)
-        return evaluate(board);   // Phase 0: static leaf. Quiescence arrives in Phase 1a.
+        return evaluate(board);   // static leaf. Quiescence arrives in Phase 1a step 5.
+
+    const uint64_t key       = board.hash();
+    const Value    alphaOrig = alpha;
+
+    // Transposition table probe: a deep-enough entry can cut immediately (never at
+    // the root, where we must return a move), and its move seeds move ordering.
+    Move ttMove = Move(Move::NO_MOVE);
+    const TTProbe tt = tt_.probe(key);
+    if (tt.hit) {
+        ttMove = tt.move;
+        if (ply > 0 && tt.depth >= depth && board.halfMoveClock() < 90) {
+            const Value ttv = valueFromTT(tt.value, ply);
+            if (tt.bound == BOUND_EXACT ||
+                (tt.bound == BOUND_LOWER && ttv >= beta) ||
+                (tt.bound == BOUND_UPPER && ttv <= alpha))
+                return ttv;
+        }
+    }
 
     Movelist moves;
     movegen::legalmoves(moves, board);
@@ -107,21 +126,37 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     if (moves.empty())
         return board.inCheck() ? mated_in(ply) : VALUE_DRAW;
 
-    Value best = -VALUE_INFINITE;
+    // TT move first — the strongest ordering signal (the rest of the ordering stack
+    // arrives in Phase 1a step 6).
+    if (ttMove != Move(Move::NO_MOVE)) {
+        for (int i = 0; i < moves.size(); ++i)
+            if (moves[i] == ttMove) { std::swap(moves[0], moves[i]); break; }
+    }
+
+    Value best     = -VALUE_INFINITE;
+    Move  bestMove = Move(Move::NO_MOVE);
     for (const auto& m : moves) {
+        tt_.prefetch(board.zobristAfter(m));
         board.makeMove(m);
         Value score = -search(board, depth - 1, -beta, -alpha, ply + 1);
         board.unmakeMove(m);
 
-        if (timeUp_) return VALUE_ZERO;   // abort: discard partial result
+        if (timeUp_) return VALUE_ZERO;   // abort: discard partial result (no TT store)
 
         if (score > best) {
-            best = score;
+            best     = score;
+            bestMove = m;
             if (ply == 0) rootBest_ = m;
         }
         if (score > alpha) alpha = score;
         if (alpha >= beta) break;         // fail-high cutoff
     }
+
+    const Bound bound = best >= beta         ? BOUND_LOWER
+                      : best > alphaOrig     ? BOUND_EXACT
+                                             : BOUND_UPPER;
+    tt_.store(key, depth, valueToTT(best, ply), VALUE_NONE, bestMove, bound);
+
     return best;
 }
 
@@ -129,6 +164,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     start_   = std::chrono::steady_clock::now();
     nodes_   = 0;
     timeUp_  = false;
+    tt_.newSearch();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
 
@@ -164,6 +200,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
                       << " score " << scoreToUci(score)
                       << " nodes " << nodes_
                       << " nps "   << nps
+                      << " hashfull " << tt_.hashfull()
                       << " time "  << ms
                       << " pv "    << uci::moveToUci(rootBestCompleted_)
                       << std::endl;
