@@ -136,6 +136,8 @@ def record(engine_path: str, go_cmd: str, maxplies: int) -> dict:
         eng.set_position(moves)             # apply the move, then dump post-move FEN
         fen = eng.fen()
         records.append({"uci": mv, "fen": fen})
+        print(f"\r[watch] playing... {len(records)} plies ({mv})",
+              end="", file=sys.stderr, flush=True)
         if fen:
             parts = fen.split()
             key = " ".join(parts[:4])       # placement/side/castling/ep
@@ -175,7 +177,7 @@ def main(argv: list[str]) -> None:
     print(f"[watch] self-play: {args.engine}  ({go_cmd})", file=sys.stderr)
     game = record(args.engine, go_cmd, args.maxplies)
     write_html(game, args.out)
-    print(f"[watch] {len(game['moves'])} plies, result={game['result']}", file=sys.stderr)
+    print(f"\n[watch] {len(game['moves'])} plies, result={game['result']}", file=sys.stderr)
     print(f"[watch] wrote {args.out} — open it in a browser.", file=sys.stderr)
 
 

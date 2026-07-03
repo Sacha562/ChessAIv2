@@ -37,6 +37,11 @@ python3 scripts/watch_selfplay.py ./chessai --movetime 500
 Then open the output file in any browser. Write it under `/mnt/c/...` to
 double-click it from Windows. Each run records a fresh game.
 
+The HTML is written **only when the game finishes**, so a live `playing... N plies`
+counter is printed to stderr while it runs. `--movetime 2000` × up to `--maxplies`
+moves can take minutes; `--nodes` (the default) plays a whole game in ~1–2 s and is
+the right choice unless you specifically want long thinking time.
+
 ## Options
 
 | Arg | Default | Purpose |
@@ -83,7 +88,8 @@ run-length form (`r2k…`).
 
 Play one self-play game to a ply cap. After each `bestmove`, apply the move and
 dump the post-move FEN; terminate on no legal move (checkmate/stalemate), threefold
-repetition, the fifty-move rule, or the ply cap. Returns
+repetition, the fifty-move rule, or the ply cap. Prints a live `playing... N plies`
+counter to stderr each ply so a long run never looks hung. Returns
 `{"start", "moves":[{uci, fen}], "result"}`.
 
 ### `write_html`
