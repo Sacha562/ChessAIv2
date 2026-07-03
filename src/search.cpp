@@ -134,12 +134,30 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     // losing captures (SEE < 0). The single biggest lever on search speed.
     orderMoves(board, moves, ttMove);
 
-    Value best     = -VALUE_INFINITE;
-    Move  bestMove = Move(Move::NO_MOVE);
+    Value best      = -VALUE_INFINITE;
+    Move  bestMove  = Move(Move::NO_MOVE);
+    int   moveCount = 0;
     for (const auto& m : moves) {
+        ++moveCount;
         tt_.prefetch(board.zobristAfter(m));
         board.makeMove(m);
-        Value score = -search(board, depth - 1, -beta, -alpha, ply + 1);
+
+        // Principal Variation Search: search the first (best-ordered) move with the
+        // full window to establish the PV, then probe each later move with a
+        // null-window scout `(alpha, alpha+1)` — far more cutoffs, so refuting an
+        // inferior move is cheap. A scout that raises alpha *and* stays below beta
+        // means the ordering guess was wrong; re-search that move on the full window
+        // to get its true score. (When beta == alpha+1 the scout already *is* the
+        // full window, so the guard skips a redundant re-search.)
+        Value score;
+        if (moveCount == 1) {
+            score = -search(board, depth - 1, -beta, -alpha, ply + 1);
+        } else {
+            score = -search(board, depth - 1, -alpha - 1, -alpha, ply + 1);
+            if (score > alpha && score < beta)
+                score = -search(board, depth - 1, -beta, -alpha, ply + 1);
+        }
+
         board.unmakeMove(m);
 
         if (timeUp_) return VALUE_ZERO;   // abort: discard partial result (no TT store)

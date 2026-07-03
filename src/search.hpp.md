@@ -1,20 +1,23 @@
 # Module: `search`
 
-The search core: iterative deepening over a fail-soft, full-window alpha-beta
-negamax with a [transposition table](tt.hpp.md) and soft/hard time management. It
-walks the game tree, calls [`evaluate`](eval.hpp.md#evaluate) at leaves, probes and
-stores TT entries, streams UCI `info` lines, and returns the best root move. Driven
-by [uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the
-deterministic benchmark).
+The search core: iterative deepening over a fail-soft **Principal Variation Search**
+(a null-window scout + re-search refinement of alpha-beta negamax) with a
+[transposition table](tt.hpp.md) and soft/hard time management. It walks the game
+tree, calls [`evaluate`](eval.hpp.md#evaluate) at leaves, probes and stores TT
+entries, streams UCI `info` lines, and returns the best root move. Driven by
+[uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the deterministic
+benchmark).
 
-The evaluation is still static material only. PVS, the pruning stack, and the rest of
-the move-ordering stack (killers, history) arrive later in Phases 1a–1b (see
+The evaluation is still static material only. The pruning stack and the rest of the
+move-ordering stack (killers, history) arrive later in Phases 1a–1b (see
 [PLAN.md](../PLAN.md) Parts 2–4). **Phase 1a step 2** added the soft/hard time
 manager; **step 3** added the [`TranspositionTable`](tt.hpp.md) probe/cutoff and
 store; **step 4** added [`see`](see.hpp.md) (Static Exchange Evaluation); **step 5**
-added the [`qsearch`](#searcherqsearch) quiescence layer at the leaf; and **step 6**
+added the [`qsearch`](#searcherqsearch) quiescence layer at the leaf; **step 6**
 replaced the TT-move-only ordering with full [`movepick`](movepick.hpp.md) ordering
-(TT move → good captures → quiets → losing captures).
+(TT move → good captures → quiets → losing captures); and **step 7** turned the
+full-window move loop into fail-soft PVS. Aspiration windows
+([PLAN.md](../PLAN.md) Component 6) are the remaining Phase 1a search-core item.
 
 ## Source Files
 
@@ -132,10 +135,29 @@ Return `uint64_t` — nodes visited in the current/last search. Read by
 
 ### `Searcher::search` (private)
 
-The recursive fail-soft negamax (returns `best`, full window). Order of operations:
-draw check → **leaf → [`qsearch`](#searcherqsearch)** (when `depth <= 0`) → **TT
-probe** → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)** → move loop →
-**TT store**.
+The recursive fail-soft negamax, refined with **Principal Variation Search** (returns
+`best`). Order of operations: draw check → **leaf → [`qsearch`](#searcherqsearch)**
+(when `depth <= 0`) → **TT probe** → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)**
+→ **PVS move loop** → **TT store**.
+
+**Principal Variation Search (PVS):** the first (best-ordered) move is searched on the
+full `[alpha, beta]` window to establish the principal variation. Every later move is
+first probed with a **null-window scout** `(alpha, alpha+1)`, which produces far more
+beta-cutoffs and so refutes an inferior move cheaply. Only when a scout both **raises
+alpha and stays below beta** (`alpha < score < beta`) was the ordering wrong for that
+move, and it is **re-searched** on the full window to obtain its exact score. The
+`score < beta` half of the guard also makes PVS a no-op at an already-null window
+(`beta == alpha+1`, i.e. a scout node one level up), where the scout *is* the full
+window — no redundant re-search is issued. PVS relies on the move ordering being good
+(the TT move / SEE-split from step 6) and is a node-count win: its bench signature is
+lower than step 6's. It does not change the search **result** — the root score, best
+move, and PV are identical to the plain full-window search. It is *not* strictly
+value-identical at every interior node, though: because the search is fail-soft, when a
+later move's null-window scout fails high (`score >= beta`) the re-search is skipped, so
+the node may return and TT-store a looser — but still sound — lower bound than a
+full-window search of that move would. That never flips a cutoff or a move choice, only
+the numeric bound; the root (searched with `beta = +VALUE_INFINITE`) always re-searches
+an alpha-raising move, so the reported score stays exact and deterministic.
 
 **Parameters:**
 | Name | Type | Description |

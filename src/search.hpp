@@ -31,8 +31,9 @@ struct TimeConfig {
     int assumedMovestogo = 30;
 };
 
-// A single search worker. Iterative deepening over a fail-soft (full-window)
-// alpha-beta negamax with a transposition table and soft/hard time management.
+// A single search worker. Iterative deepening over a fail-soft Principal Variation
+// Search (null-window scout + re-search) with a transposition table and soft/hard
+// time management.
 // One instance per search; the shared `stop` flag lets the UCI thread abort it,
 // and the transposition table is shared (and outlives the searcher) so results
 // persist across moves and, later, across threads.
