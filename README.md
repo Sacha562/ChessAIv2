@@ -71,6 +71,54 @@ perft 5                   # perft divide from the current position
 quit
 ```
 
+## Testing — engine vs engine
+
+Different versions of the engine play each other through
+[`scripts/match.py`](scripts/match.py), a wrapper around **fastchess** (the modern
+cutechess-cli successor; the aligned plan is [`PLAN.md`](PLAN.md) §29). Run it in
+WSL2, where `make` and `fastchess` live. A "version" is either a **git commit**
+(built and cached as `bin/chessai-<sha>`) or the **same binary with a UCI option
+toggled** — both are supported.
+
+```bash
+# Phase-0 smoke test: working tree vs the main baseline, 100 games, crash-scan
+python scripts/match.py working main
+
+# Phase-1+ SPRT: a feature commit vs the previous one, balanced opening suite
+python scripts/match.py --mode sprt HEAD HEAD~1 --book books/UHO_4060_v2.epd
+
+# A/B a single tunable via a UCI option, no rebuild between sides
+python scripts/match.py --mode sprt HEAD HEAD --opt-a Hash=128 --opt-b Hash=16
+
+# Just print the fastchess command (no build, no run)
+python scripts/match.py --dry-run working main
+```
+
+The default `sanity` mode is the useful one *now* (Phase 0): it plays a short
+match and flags crashes, disconnects, illegal moves, and time losses — real Elo
+`sprt` tests only start mattering once a real search lands (Phase 1a). Provide
+fastchess via `--fastchess`, `$FASTCHESS`, `./bin/fastchess`, or `PATH`
+(<https://github.com/Disservin/fastchess>); drop a balanced opening suite in
+`books/`. `bin/`, `books/`, and `games/` are git-ignored. Full flag reference:
+[`scripts/match.py.md`](scripts/match.py.md). **OpenBench** (distributed SPRT) is
+the later step once there's spare hardware — the `make EXE=` target it needs is
+already in place.
+
+### Watch a self-play game
+
+For a *watchable* game rather than a headless match,
+[`scripts/watch_selfplay.py`](scripts/watch_selfplay.py) has the engine play
+itself and writes a **standalone HTML board** you open in a browser (auto-play,
+step, scrub, check/mate detection — no server, no dependencies):
+
+```bash
+python scripts/watch_selfplay.py ./chessai --nodes 20000 -o /mnt/c/Users/you/game.html
+```
+
+Open the output file (write it under `/mnt/c/...` to double-click from Windows).
+Generated `*.html` files are git-ignored. Flags:
+[`scripts/watch_selfplay.py.md`](scripts/watch_selfplay.py.md).
+
 ## Layout
 
 ```
@@ -82,4 +130,6 @@ src/uci.*           UCI command loop (threaded search)
 src/perft.*         perft + correctness suite
 src/bench.*         deterministic benchmark
 src/main.cpp        entry point / command dispatch
+scripts/match.py    engine-vs-engine match / SPRT runner (fastchess wrapper)
+scripts/watch_selfplay.py   self-play -> standalone HTML board viewer
 ```
