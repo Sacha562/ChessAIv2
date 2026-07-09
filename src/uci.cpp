@@ -159,6 +159,22 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.useCountermove = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseIIR" && !value.empty()) {
             tunables_.useIir = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseNMP" && !value.empty()) {
+            tunables_.useNmp = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseRFP" && !value.empty()) {
+            tunables_.useRfp = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseFutility" && !value.empty()) {
+            tunables_.useFutility = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseLMP" && !value.empty()) {
+            tunables_.useLmp = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseLMR" && !value.empty()) {
+            tunables_.useLmr = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseCheckExt" && !value.empty()) {
+            tunables_.useCheckExt = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseAspiration" && !value.empty()) {
+            tunables_.useAspiration = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "AspirationDelta" && !value.empty()) {
+            tunables_.aspirationDelta = std::clamp(std::stoi(value), 1, 500);
         }
     } catch (...) { /* ignore malformed values */
     }
@@ -186,6 +202,14 @@ void Engine::loop() {
                       << "option name UseHistory type spin default 0 min 0 max 1\n"
                       << "option name UseCountermove type spin default 1 min 0 max 1\n"
                       << "option name UseIIR type spin default 0 min 0 max 1\n"
+                      << "option name UseNMP type spin default 1 min 0 max 1\n"
+                      << "option name UseRFP type spin default 1 min 0 max 1\n"
+                      << "option name UseFutility type spin default 1 min 0 max 1\n"
+                      << "option name UseLMP type spin default 1 min 0 max 1\n"
+                      << "option name UseLMR type spin default 1 min 0 max 1\n"
+                      << "option name UseCheckExt type spin default 1 min 0 max 1\n"
+                      << "option name UseAspiration type spin default 1 min 0 max 1\n"
+                      << "option name AspirationDelta type spin default 15 min 1 max 500\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

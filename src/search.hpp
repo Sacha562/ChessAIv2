@@ -51,6 +51,18 @@ struct Tunables {
     bool useHistory     = false;
     bool useCountermove = true;
     bool useIir         = false;
+
+    // Phase 1b pruning / reduction / extension toggles (each individually ablatable).
+    bool useNmp        = true; // null-move pruning
+    bool useRfp        = true; // reverse futility (static null-move) pruning
+    bool useFutility   = true; // futility pruning of quiets near the horizon
+    bool useLmp        = true; // late-move (move-count) pruning
+    bool useLmr        = true; // late move reductions
+    bool useCheckExt   = true; // check extensions
+    bool useAspiration = true; // aspiration windows at the root
+
+    // Aspiration: initial half-window (cp) around the previous iteration's score.
+    Value aspirationDelta = 15;
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
@@ -73,6 +85,7 @@ public:
 
 private:
     Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove);
+    Value   aspirationSearch(Board& board, int depth, Value prevScore);
     Value   qsearch(Board& board, Value alpha, Value beta, int ply);
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
@@ -82,7 +95,8 @@ private:
     TranspositionTable& tt_;
     Tunables            tp_;
     uint64_t            nodes_ = 0;
-    History             history_; // quiet-move ordering heuristics (per search)
+    History             history_;                // quiet-move ordering heuristics (per search)
+    Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
 
     std::chrono::steady_clock::time_point start_{};
     int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)

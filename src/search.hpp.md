@@ -8,17 +8,23 @@ entries, streams UCI `info` lines, and returns the best root move. Driven by
 [uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the deterministic
 benchmark).
 
-The evaluation is still static material only. The forward-pruning stack (null-move,
-LMR, futility/LMP) arrives later in Phase 1b (see [PLAN.md](../PLAN.md) Parts 2–4).
-**Phase 1a step 2** added the soft/hard time manager; **step 3** added the
-[`TranspositionTable`](tt.hpp.md) probe/cutoff and store; **step 4** added
-[`see`](see.hpp.md) (Static Exchange Evaluation); **step 5** added the
-[`qsearch`](#searcherqsearch) quiescence layer at the leaf; **step 6** replaced the
-TT-move-only ordering with full [`movepick`](movepick.hpp.md) ordering; and **step 7**
-turned the full-window move loop into fail-soft PVS. **Phase 1b step 1** added the
-quiet-move ordering heuristics ([`History`](history.hpp.md): killers, butterfly
-history with malus, countermoves) and **Internal Iterative Reduction** (IIR). Aspiration
-windows ([PLAN.md](../PLAN.md) Component 6) are the remaining search-core item.
+The evaluation is still static material only. Phase 1a built the search *core* (TT,
+SEE, qsearch, movepick ordering, PVS, soft/hard time management). **Phase 1b** then
+added the selective-search layers on top (see [PLAN.md](../PLAN.md) Parts 3–4):
+
+- **step 1** — the quiet-move ordering heuristics ([`History`](history.hpp.md): killers,
+  butterfly history with malus, countermoves) and **Internal Iterative Reduction** (IIR);
+- **the rest of Phase 1b** — the forward-pruning / reduction / extension stack, all in
+  [`search`](#searchersearch): a per-ply **static eval** with the `improving` trend,
+  **reverse futility pruning** (RFP), **null-move pruning** (NMP), **futility pruning**
+  and **late-move (move-count) pruning** (LMP) of quiets, **late move reductions** (LMR),
+  **check extensions**, and **aspiration windows** ([`aspirationSearch`](#searcheraspirationsearch))
+  at the root.
+
+Each selective layer is behind a [`Tunables`](#struct-tunables) toggle so it can be
+individually A/B-isolated — the discipline that caught step-1's history/IIR regressions.
+Everything above still sits on the fail-soft **Principal Variation Search** negamax with
+a [transposition table](tt.hpp.md).
 
 ## Source Files
 
@@ -28,10 +34,13 @@ windows ([PLAN.md](../PLAN.md) Component 6) are the remaining search-core item.
 ## Namespace
 
 - Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `IIR_MIN_DEPTH`, and `scoreToUci` live in an
-  anonymous namespace in `search.cpp` — internal linkage. (The former `DELTA_MARGIN` /
-  `ENDGAME_PIECES` q-search constants are now runtime-tunable fields of
-  [`Tunables`](#struct-tunables).)
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the selective-search knobs —
+  `IIR_MIN_DEPTH`, the `NMP_*`, `RFP_*`, `FUT_*`, `LMP_MAX_DEPTH`, `LMR_*`, and
+  `ASPIRATION_MIN_DEPTH` constants, plus the helpers `lmrReduction` (a precomputed
+  `ln·ln` reduction table, lazily built once), `lmpCount`, and `hasNonPawnMaterial` —
+  live in an anonymous namespace in `search.cpp` (internal linkage). The margins are
+  first-cut and SPSA-tunable later. (The former `DELTA_MARGIN` / `ENDGAME_PIECES`
+  q-search constants are now runtime-tunable fields of [`Tunables`](#struct-tunables).)
 
 ## Objects / Interfaces
 
@@ -74,13 +83,23 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useHistory` | `bool` | `false` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
 | `useIir` | `bool` | `false` | Enable Internal Iterative Reduction (`UseIIR`). |
+| `useNmp` | `bool` | `true` | Enable null-move pruning (`UseNMP`). |
+| `useRfp` | `bool` | `true` | Enable reverse futility / static null-move pruning (`UseRFP`). |
+| `useFutility` | `bool` | `true` | Enable futility pruning of quiets near the horizon (`UseFutility`). |
+| `useLmp` | `bool` | `true` | Enable late-move (move-count) pruning (`UseLMP`). |
+| `useLmr` | `bool` | `true` | Enable late move reductions (`UseLMR`). |
+| `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
+| `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
+| `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
 
-The four `use*` toggles exist to **A/B-isolate** each Phase 1b step-1 signal's Elo: with
-all off the search reproduces the pre-step-1 ordering (verified — identical node counts),
-and flipping one on measures that signal's marginal contribution. `useKillers` /
-`useHistory` / `useCountermove` are applied via
+The `use*` toggles exist to **A/B-isolate** each Phase 1b signal's Elo (flip one on/off,
+run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via
 [`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top of
-[`think`](#searcherthink)); `useIir` gates the IIR step in [`search`](#searchersearch).
+[`think`](#searcherthink)); `useIir` / `useNmp` / `useRfp` / `useFutility` / `useLmp` /
+`useLmr` / `useCheckExt` each gate their step inside [`search`](#searchersearch); and
+`useAspiration` / `aspirationDelta` drive
+[`aspirationSearch`](#searcheraspirationsearch). With every selective toggle off the
+search reproduces the plain PVS + step-1-ordering engine.
 
 **Default rationale (Phase 1b step-1 A/B, 1000 games/signal @ 8+0.08 vs the pre-step-1
 build):** killers **+44 Elo** and countermove **~0** are **on**; butterfly history
@@ -107,6 +126,7 @@ just want the defaults).
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly history, countermoves) for this search. |
+| `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
 | `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
 | `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
@@ -116,7 +136,7 @@ just want the defaults).
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -163,11 +183,58 @@ Return `uint64_t` — nodes visited in the current/last search. Read by
 
 ### `Searcher::search` (private)
 
-The recursive fail-soft negamax, refined with **Principal Variation Search** (returns
-`best`). Order of operations: draw check → **leaf → [`qsearch`](#searcherqsearch)**
-(when `depth <= 0`) → **TT probe** → **IIR** → movegen →
-**[`orderMoves`](movepick.hpp.md#ordermoves)** → **PVS move loop** (with quiet-cutoff
-heuristic updates) → **TT store**.
+The recursive fail-soft negamax, refined with **Principal Variation Search** and the
+full Phase 1b selective-search stack (returns `best`). Order of operations:
+
+1. draw check → **leaf / ply guard → [`qsearch`](#searcherqsearch)** (when `depth <= 0`
+   or `ply >= MAX_PLY - 1`);
+2. **TT probe** (cutoff only off the PV) → **static eval** (reused from the TT when
+   present; skipped in check) → **`improving`** trend;
+3. **whole-node pruning** (off-PV, not in check, away from mate): **RFP** then **NMP**;
+4. **IIR** (gated, default off) → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)**;
+5. **move loop**: per-move quiet pruning (**LMP**, **futility**) → make → **check
+   extension** → **LMR** reduction → **PVS** search/re-search → cutoff bookkeeping
+   (quiet-cutoff [`history`](history.hpp.md#historyupdatequietcutoff) updates);
+6. **TT store** (value, best move, bound, and the static eval).
+
+`pvNode` is derived as `beta - alpha > 1`: the root and full-window nodes are PV; the
+null-window scout nodes are not. Every forward-pruning / reduction step is restricted to
+non-PV nodes (and skipped in check and near mate scores) so the principal variation is
+searched exactly.
+
+**Selective-search steps** (each gated by its [`Tunables`](#struct-tunables) toggle):
+
+- **Static eval & `improving`** — at a non-check node the static eval is read from the
+  TT (`tt.eval`) or computed by [`evaluate`](eval.hpp.md#evaluate) and cached in
+  `staticEvals_[ply]`. `improving` is true when this eval exceeds the same side's eval
+  two plies ago (`staticEvals_[ply-2]`) — pruning is a touch more aggressive when the
+  position is *not* improving.
+- **Reverse futility pruning (RFP)** — near the horizon (`depth <= RFP_MAX_DEPTH`), a
+  static eval a depth-scaled margin **above** beta (`eval - RFP_MARGIN*depth >= beta`) is
+  assumed to hold and `eval` is returned.
+- **Null-move pruning (NMP)** — give the opponent a free move
+  ([`board.makeNullMove()`](../include/chess.hpp)) and search at reduced depth
+  `depth - 1 - R` (`R = NMP_BASE + depth/NMP_DIV + min((eval-beta)/NMP_EVAL_DIV,
+  NMP_EVAL_MAX)`); a result still `>= beta` prunes. Guarded by `eval >= beta`,
+  `depth >= NMP_MIN_DEPTH`, and **non-pawn material** for the side to move (`hasNonPawnMaterial`,
+  the zugzwang guard). A returned mate score is not trusted (clamped to `beta`).
+- **Futility pruning** — a quiet whose `eval + FUT_MARGIN*depth + FUT_BASE <= alpha` near
+  the horizon cannot reach alpha and is skipped.
+- **Late-move pruning (LMP)** — past a depth-scaled quiet count (`lmpCount`, smaller when
+  not `improving`) the remaining quiets are skipped.
+- **Check extension** — a move that gives check is searched one ply deeper
+  (`ext = 1`), bounded by `ply + 1 < MAX_PLY - 1` so `ply` can never overrun the per-ply
+  tables.
+- **Late move reductions (LMR)** — late quiet, non-checking moves are searched at
+  `newDepth - reduction`, where `reduction` comes from the `ln(depth)·ln(moveCount)`
+  table, reduced by one on the PV and one when `improving`, clamped to keep the reduced
+  depth `>= 1`. A reduced search that beats alpha is re-searched at full `newDepth`
+  (null window), then at the full window if it lands in `(alpha, beta)`.
+
+The per-move quiet pruning (futility/LMP) and reductions never touch the first move,
+never fire in check or on the PV, and use `continue` (not `break`) so interleaved
+captures/checks are still searched; they are also suppressed while `best` is still a
+mate loss (`best <= VALUE_MATED_IN_MAX_PLY`), so a forced escape is never pruned.
 
 **Internal Iterative Reduction (IIR):** (gated by [`tp_.useIir`](#struct-tunables)) when
 a node has real depth (`>= IIR_MIN_DEPTH`, currently 4) but the TT probe returned **no
@@ -218,19 +285,22 @@ when aborting (`timeUp_`).
 
 **Transposition table use:**
 - **Probe** at [`board.hash()`](../include/chess.hpp). A hit yields the stored move
-  (used for ordering) and, when `ply > 0`, `entry.depth >= depth`, and the fifty-move
-  clock is low (`halfMoveClock() < 90`), an immediate cutoff if the bound qualifies:
-  `EXACT` always, `LOWER` when `ttv >= beta`, `UPPER` when `ttv <= alpha`, where
-  `ttv = valueFromTT(entry.value, ply)`. **Never cuts at the root** so a move is
-  always produced.
+  (used for ordering) and its cached static eval, and — **at a non-PV node** with
+  `entry.depth >= depth` and a low fifty-move clock (`halfMoveClock() < 90`) — an
+  immediate cutoff if the bound qualifies: `EXACT` always, `LOWER` when `ttv >= beta`,
+  `UPPER` when `ttv <= alpha`, where `ttv = valueFromTT(entry.value, ply)`. The
+  `!pvNode` guard means the root (and every PV node) **never cuts**, so a move is always
+  produced and the PV stays exact.
 - **Ordering**: the probed TT move is passed to
   [`orderMoves`](movepick.hpp.md#ordermoves) together with [`history_`](history.hpp.md),
   the `ply`, and `prevMove`, which floats the TT move first and then sorts the rest
   (good captures by SEE+MVV-LVA, killers, countermove, history-scored quiets, losing
   captures).
-- **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the
-  best move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`,
-  else `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`.
+- **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the node's
+  **static eval** (`VALUE_NONE` when in check), the best move, and the bound — `LOWER` if
+  `best >= beta`, `EXACT` if `best > alphaOrig`, else `UPPER`. `alphaOrig` is captured
+  before the loop mutates `alpha`. The stored eval is what a later probe reuses instead
+  of recomputing [`evaluate`](eval.hpp.md#evaluate).
 - **Prefetch**: `tt_.prefetch(board.zobristAfter(m))` before each `makeMove`.
 
 **Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`,
@@ -243,6 +313,28 @@ library's default is threefold. On abort, partial results are discarded and **no
 stored in the TT. A stale/illegal TT move from a key collision is harmless: it is
 only searched if it matches a generated legal move (the swap is a no-op otherwise).
 Mate scores are rebased through the TT via [`valueToTT`/`valueFromTT`](tt.hpp.md#valuetott--valuefromtt).
+
+### `Searcher::aspirationSearch` (private)
+
+Runs one root iteration inside an **aspiration window** and returns its score. Called
+once per iterative-deepening depth from [`think`](#searcherthink), seeded with the
+previous iteration's score.
+
+- Below `ASPIRATION_MIN_DEPTH` (5), when `useAspiration` is off, or on a mate score, it
+  is a plain full-window `search(depth, -∞, +∞, 0)`.
+- Otherwise it opens a narrow window `[prevScore - delta, prevScore + delta]`
+  (`delta = aspirationDelta`, 15 cp) and searches. On a **fail low** (`v <= alpha`) it
+  drops `alpha` (and pulls `beta` toward the midpoint); on a **fail high** (`v >= beta`)
+  it raises `beta`; either way it doubles `delta` and re-searches, so only the failing
+  side widens. It returns as soon as the score lands inside the window (or on `timeUp_`).
+
+**Parameters:** `board` (`Board&`, in/out), `depth` (`int`), `prevScore` (`Value` — the
+last completed iteration's score). **Returns:** [`Value`](types.hpp.md#using-value--int).
+
+**Warnings:** a narrower window wins more cutoffs but costs a re-search on every fail;
+gating to `depth >= 5` avoids the noisy shallow iterations. The final in-window search
+sets [`rootBest_`](#class-searcher) correctly; an aborted re-search (`timeUp_`) is
+discarded by [`think`](#searcherthink) like any incomplete iteration.
 
 ### `Searcher::qsearch` (private)
 

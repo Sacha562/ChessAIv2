@@ -85,12 +85,13 @@ reading input.
 Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or a
 field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
-and `EndgamePieces`, plus the ordering-heuristic on/off toggles `UseKillers`,
-`UseHistory`, `UseCountermove`, and `UseIIR` (`spin`, `0`/`1`) used to A/B-isolate each
-Phase 1b step-1 signal's Elo. Their defaults reflect that A/B result — `UseKillers` and
-`UseCountermove` default `1` (killers won +44 Elo, countermove ~0), while `UseHistory`
-and `UseIIR` default `0` (they lost −23 / −36 and are deferred until LMR). Each is
-advertised in the `uci` reply as
+and `EndgamePieces`, plus the Phase 1b selective-search toggles (`spin`, `0`/`1`) used to
+A/B-isolate each signal's Elo: the step-1 ordering signals `UseKillers`, `UseHistory`,
+`UseCountermove`, `UseIIR` (defaults reflect that A/B — `UseKillers`/`UseCountermove`
+default `1`, `UseHistory`/`UseIIR` default `0`, deferred until LMR), and the pruning /
+reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
+`UseCheckExt`, `UseAspiration` (all default `1`) with `AspirationDelta` (`spin`, default
+`15`, the initial aspiration half-window in cp). Each is advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
 **clamped to its advertised `min`/`max`** on store so an out-of-range value (e.g. a raw
 spin from a tuner) can never reach the search as an out-of-bounds int. The advertised `default`
