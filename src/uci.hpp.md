@@ -86,8 +86,11 @@ Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or
 field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
 and `EndgamePieces`, plus the ordering-heuristic on/off toggles `UseKillers`,
-`UseHistory`, `UseCountermove`, and `UseIIR` (`spin`, `0`/`1`, default `1`) used to
-A/B-isolate each Phase 1b step-1 signal's Elo — each advertised in the `uci` reply as
+`UseHistory`, `UseCountermove`, and `UseIIR` (`spin`, `0`/`1`) used to A/B-isolate each
+Phase 1b step-1 signal's Elo. Their defaults reflect that A/B result — `UseKillers` and
+`UseCountermove` default `1` (killers won +44 Elo, countermove ~0), while `UseHistory`
+and `UseIIR` default `0` (they lost −23 / −36 and are deferred until LMR). Each is
+advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
 **clamped to its advertised `min`/`max`** on store so an out-of-range value (e.g. a raw
 spin from a tuner) can never reach the search as an out-of-bounds int. The advertised `default`

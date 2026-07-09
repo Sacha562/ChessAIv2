@@ -183,9 +183,9 @@ void Engine::loop() {
                       << "option name DeltaMargin type spin default 203 min 0 max 1000\n"
                       << "option name EndgamePieces type spin default 7 min 0 max 32\n"
                       << "option name UseKillers type spin default 1 min 0 max 1\n"
-                      << "option name UseHistory type spin default 1 min 0 max 1\n"
+                      << "option name UseHistory type spin default 0 min 0 max 1\n"
                       << "option name UseCountermove type spin default 1 min 0 max 1\n"
-                      << "option name UseIIR type spin default 1 min 0 max 1\n"
+                      << "option name UseIIR type spin default 0 min 0 max 1\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

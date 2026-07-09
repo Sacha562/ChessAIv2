@@ -71,9 +71,9 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
-| `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
+| `useHistory` | `bool` | `false` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
-| `useIir` | `bool` | `true` | Enable Internal Iterative Reduction (`UseIIR`). |
+| `useIir` | `bool` | `false` | Enable Internal Iterative Reduction (`UseIIR`). |
 
 The four `use*` toggles exist to **A/B-isolate** each Phase 1b step-1 signal's Elo: with
 all off the search reproduces the pre-step-1 ordering (verified — identical node counts),
@@ -81,6 +81,13 @@ and flipping one on measures that signal's marginal contribution. `useKillers` /
 `useHistory` / `useCountermove` are applied via
 [`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top of
 [`think`](#searcherthink)); `useIir` gates the IIR step in [`search`](#searchersearch).
+
+**Default rationale (Phase 1b step-1 A/B, 1000 games/signal @ 8+0.08 vs the pre-step-1
+build):** killers **+44 Elo** and countermove **~0** are **on**; butterfly history
+**−23** and IIR **−36** are **off**. History reorders quiets worse than the default
+movegen order until the reductions that consume it (LMR/LMP, PLAN.md Part 4) exist, and
+this IIR fires at every node type — both are deferred (kept wired and UCI-tunable) until
+LMR lands to make them pay and, for IIR, to gate it (non-PV / cut-node).
 
 **Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::think`](#searcherthink), [`Searcher::search`](#searchersearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 
