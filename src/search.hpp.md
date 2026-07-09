@@ -83,7 +83,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
 | `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
-| `useIir` | `bool` | `false` | Enable Internal Iterative Reduction (`UseIIR`). |
+| `useIir` | `bool` | `true` | Enable Internal Iterative Reduction (`UseIIR`). |
 | `useNmp` | `bool` | `true` | Enable null-move pruning (`UseNMP`). |
 | `useRfp` | `bool` | `true` | Enable reverse futility / static null-move pruning (`UseRFP`). |
 | `useFutility` | `bool` | `true` | Enable futility pruning of quiets near the horizon (`UseFutility`). |
@@ -102,13 +102,13 @@ run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via
 [`aspirationSearch`](#searcheraspirationsearch). With every selective toggle off the
 search reproduces the plain PVS + step-1-ordering engine.
 
-**Default rationale (A/B @ 8+0.08 vs the same binary):** killers **+44 Elo** and
-countermove **~0** are **on**. Butterfly **history** measured **−23** in step 1 (no
-pruning) but **+247** once the full pruning stack exists — LMP/LMR discard late-ordered
-quiets, so good quiet ordering is what stops them from pruning a winning move
-("ordering makes pruning safe", PLAN.md Part 4); it is now **on**. **IIR** was **−36** in
-step 1 and is retested against the pruning stack separately, so it stays **off** for now.
-All four remain wired and UCI-tunable for per-signal A/B isolation.
+**Default rationale (A/B @ 8+0.08 vs the same binary):** all four are **on**. Killers
+**+44 Elo** and countermove **~0**. Butterfly **history** and **IIR** both *inverted*
+once the pruning stack existed to consume them: history **−23 → +247** and IIR
+**−36 → +16** (95% CI `[+4, +28]`), because LMP/LMR prune/reduce late-ordered quiets, so
+good ordering and a hash-move-first search are what stop them discarding a winning move
+("ordering makes pruning safe", PLAN.md Part 4). All four remain wired and UCI-tunable
+for per-signal A/B isolation.
 
 **Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::think`](#searcherthink), [`Searcher::search`](#searchersearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 

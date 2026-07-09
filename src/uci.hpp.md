@@ -87,9 +87,9 @@ field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable option
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
 and `EndgamePieces`, plus the Phase 1b selective-search toggles (`spin`, `0`/`1`) used to
 A/B-isolate each signal's Elo: the step-1 ordering signals `UseKillers`, `UseHistory`,
-`UseCountermove`, `UseIIR` (`UseKillers`/`UseCountermove`/`UseHistory` default `1` —
-history was −23 in step 1 but +247 once LMP/LMR exist to consume its ordering; `UseIIR`
-defaults `0`, still a loss), and the pruning /
+`UseCountermove`, `UseIIR` (all default `1` — history and IIR both inverted from step-1
+losses to wins once LMP/LMR existed to consume them: history −23 → +247, IIR −36 → +16),
+and the pruning /
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt`, `UseAspiration` (all default `1`) with `AspirationDelta` (`spin`, default
 `15`, the initial aspiration half-window in cp). Each is advertised in the `uci` reply as
