@@ -66,9 +66,9 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `softPermille` | `int` | `600` | Soft limit = `base * softPermille / 1000`. Past it, no new ID iteration is started. |
 | `hardPermille` | `int` | `2400` | Hard limit = `base * hardPermille / 1000`. Past it, the search aborts mid-iteration. |
 | `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. Divides the clock, so it must stay `>= 1`. |
-| `tempo` | `Value` | `10` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
-| `deltaMargin` | `Value` | `200` | Q-search delta-pruning safety cushion (cp). |
-| `endgamePieces` | `int` | `8` | Total piece count at/below which delta pruning switches off. |
+| `tempo` | `Value` | `9` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
+| `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
+| `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
 
 **Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 

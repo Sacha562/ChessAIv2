@@ -169,9 +169,9 @@ void Engine::loop() {
                       << "option name TimeSoftPermille type spin default 600 min 1 max 100000\n"
                       << "option name TimeHardPermille type spin default 2400 min 1 max 100000\n"
                       << "option name AssumedMovestogo type spin default 30 min 1 max 300\n"
-                      << "option name Tempo type spin default 10 min 0 max 100\n"
-                      << "option name DeltaMargin type spin default 200 min 0 max 1000\n"
-                      << "option name EndgamePieces type spin default 8 min 0 max 32\n"
+                      << "option name Tempo type spin default 9 min 0 max 100\n"
+                      << "option name DeltaMargin type spin default 203 min 0 max 1000\n"
+                      << "option name EndgamePieces type spin default 7 min 0 max 32\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

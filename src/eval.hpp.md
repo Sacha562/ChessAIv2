@@ -35,7 +35,7 @@ quiescence, so it is called directly when `depth <= 0`.
 | Name | Type | Description |
 |------|------|-------------|
 | `board` | `const Board&` | Position to score. Read-only; not modified. |
-| `tempo` | `Value` | Side-to-move bonus (centipawns), added after the perspective flip. A self-play-tunable knob; callers pass [`Tunables::tempo`](search.hpp.md#struct-tunables) (default `10`). |
+| `tempo` | `Value` | Side-to-move bonus (centipawns), added after the perspective flip. A self-play-tunable knob; callers pass [`Tunables::tempo`](search.hpp.md#struct-tunables) (default `9`). |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — centipawns from the
 side-to-move's perspective. Positive favors the side to move. Computed as the

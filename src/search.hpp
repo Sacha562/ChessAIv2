@@ -35,11 +35,11 @@ struct Tunables {
     int assumedMovestogo = 30;   // assumed moves-to-go under sudden death (>= 1)
 
     // Evaluation.
-    Value tempo = 10; // side-to-move bonus (centipawns)
+    Value tempo = 9; // side-to-move bonus (centipawns)
 
     // Quiescence delta pruning.
-    Value deltaMargin   = 200; // delta-pruning safety cushion (centipawns)
-    int   endgamePieces = 8;   // total pieces at/below which delta pruning is off
+    Value deltaMargin   = 203; // delta-pruning safety cushion (centipawns)
+    int   endgamePieces = 7;   // total pieces at/below which delta pruning is off
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation

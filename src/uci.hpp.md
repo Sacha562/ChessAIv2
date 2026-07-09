@@ -88,7 +88,10 @@ field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable option
 and `EndgamePieces` — each advertised in the `uci` reply as a `spin` option so a
 self-play tuner (SPSA) can perturb it without a rebuild, and each **clamped to its
 advertised `min`/`max`** on store so an out-of-range value (e.g. a raw spin from a
-tuner) can never reach the search as an out-of-bounds int. Setting `Hash` first calls [`stopSearch`](#enginestopsearch) (no
+tuner) can never reach the search as an out-of-bounds int. The advertised `default`
+for `Tempo`, `DeltaMargin`, and `EndgamePieces` matches the corresponding
+[`Tunables`](search.hpp.md#struct-tunables) field, whose values were set from an SPSA
+self-play tune. Setting `Hash` first calls [`stopSearch`](#enginestopsearch) (no
 live search may hold the table) and then
 [`tt_.resize`](tt.hpp.md#transpositiontableresize). Malformed integer values are
 ignored (caught). Other option names are accepted and ignored for now.
