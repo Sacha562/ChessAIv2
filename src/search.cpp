@@ -57,17 +57,23 @@ constexpr int LMR_MIN_MOVES = 2; // start reducing at the 3rd move
 // Aspiration windows: only worthwhile once a few iterations have stabilised.
 constexpr int ASPIRATION_MIN_DEPTH = 5;
 
+// A TT entry may only cut when the fifty-move clock is well below the 100-halfmove
+// draw; otherwise a stored score can't be trusted (it may ignore the looming draw).
+constexpr int TT_CUTOFF_MAX_HALFMOVE = 90;
+
 // LMR reduction r(depth, moveCount) ~= 0.78 + ln(depth)*ln(moveCount)/2.4, precomputed
-// once (indices saturate at 64, where reductions plateau). Thread-safe static init.
-int lmrReduction(int depth, int moveCount) {
-    static const std::array<std::array<uint8_t, 64>, 64> table = [] {
-        std::array<std::array<uint8_t, 64>, 64> t{};
-        for (int d = 1; d < 64; ++d)
-            for (int m = 1; m < 64; ++m)
+// once over a square table whose indices saturate (reductions plateau by then).
+// Thread-safe static init.
+constexpr int LMR_TABLE_DIM = 64;
+int           lmrReduction(int depth, int moveCount) {
+    static const std::array<std::array<uint8_t, LMR_TABLE_DIM>, LMR_TABLE_DIM> table = [] {
+        std::array<std::array<uint8_t, LMR_TABLE_DIM>, LMR_TABLE_DIM> t{};
+        for (int d = 1; d < LMR_TABLE_DIM; ++d)
+            for (int m = 1; m < LMR_TABLE_DIM; ++m)
                 t[d][m] = static_cast<uint8_t>(0.78 + std::log(d) * std::log(m) / 2.4);
         return t;
     }();
-    return table[std::min(depth, 63)][std::min(moveCount, 63)];
+    return table[std::min(depth, LMR_TABLE_DIM - 1)][std::min(moveCount, LMR_TABLE_DIM - 1)];
 }
 
 // Quiet move-count threshold for LMP at `depth`; fewer when the eval is not improving.
@@ -187,7 +193,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     const TTProbe tt     = tt_.probe(key);
     if (tt.hit) {
         ttMove = tt.move;
-        if (!pvNode && tt.depth >= depth && board.halfMoveClock() < 90) {
+        if (!pvNode && tt.depth >= depth && board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE) {
             const Value ttv = valueFromTT(tt.value, ply);
             if (tt.bound == BOUND_EXACT || (tt.bound == BOUND_LOWER && ttv >= beta) ||
                 (tt.bound == BOUND_UPPER && ttv <= alpha))
@@ -453,9 +459,11 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
 
     setupTiming(limits, board);
 
-    // Cap at MAX_PLY - 1: ply indexes fixed-size per-ply tables (killers), and with no
-    // extensions yet a node's ply never exceeds the root depth. Clamp so a large
-    // `go depth N` can never drive ply out of those tables.
+    // Cap the root depth at MAX_PLY - 1 so a huge `go depth N` can't run the
+    // iterative-deepening loop itself past the per-ply tables. (A node's `ply` can still
+    // exceed the root depth via check extensions; what keeps the killer / staticEvals_
+    // tables in bounds there is the `ply >= MAX_PLY - 1` leaf guard in search/qsearch,
+    // plus the `ply + 1 < MAX_PLY - 1` gate on the extension itself.)
     const int maxDepth = std::min((limits.depth > 0) ? limits.depth : MAX_PLY - 1, MAX_PLY - 1);
     Value     score    = VALUE_ZERO;
 

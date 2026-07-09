@@ -35,8 +35,9 @@ a [transposition table](tt.hpp.md).
 
 - Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
 - `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the selective-search knobs —
-  `IIR_MIN_DEPTH`, the `NMP_*`, `RFP_*`, `FUT_*`, `LMP_MAX_DEPTH`, `LMR_*`, and
-  `ASPIRATION_MIN_DEPTH` constants, plus the helpers `lmrReduction` (a precomputed
+  `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, the `NMP_*`, `RFP_*`, `FUT_*`,
+  `LMP_MAX_DEPTH`, `LMR_*`, and `ASPIRATION_MIN_DEPTH` constants, plus the helpers
+  `lmrReduction` (a precomputed
   `ln·ln` reduction table, lazily built once), `lmpCount`, and `hasNonPawnMaterial` —
   live in an anonymous namespace in `search.cpp` (internal linkage). The margins are
   first-cut and SPSA-tunable later. (The former `DELTA_MARGIN` / `ENDGAME_PIECES`
@@ -171,10 +172,13 @@ shared `stop_` flag.
 `think` never returns a null move in a non-terminal position even if aborted at
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
 stands). Soft stop: once elapsed time reaches [`softLimitMs_`](#class-searcher) no
-new depth is started; the current depth may still run until the hard limit. The
-iterative-deepening cap is clamped to `MAX_PLY - 1` even when `go depth N` requests a
-larger `N`, so a node's `ply` can never overrun the fixed per-ply tables (the
-[`History`](history.hpp.md) killers) it indexes.
+new depth is started; the current depth may still run until the hard limit. The root
+depth is clamped to `MAX_PLY - 1` even when `go depth N` requests a larger `N`, so the
+iterative-deepening loop itself cannot run past the per-ply tables. A node's `ply` can
+still exceed the root depth via **check extensions**; what keeps the
+[`History`](history.hpp.md) killers and `staticEvals_` in bounds there is the
+`ply >= MAX_PLY - 1` leaf guard in [`search`](#searchersearch) / [`qsearch`](#searcherqsearch)
+plus the `ply + 1 < MAX_PLY - 1` gate on the extension.
 
 ### `Searcher::nodes`
 
@@ -286,8 +290,8 @@ when aborting (`timeUp_`).
 **Transposition table use:**
 - **Probe** at [`board.hash()`](../include/chess.hpp). A hit yields the stored move
   (used for ordering) and its cached static eval, and — **at a non-PV node** with
-  `entry.depth >= depth` and a low fifty-move clock (`halfMoveClock() < 90`) — an
-  immediate cutoff if the bound qualifies: `EXACT` always, `LOWER` when `ttv >= beta`,
+  `entry.depth >= depth` and a low fifty-move clock (`halfMoveClock() <
+  TT_CUTOFF_MAX_HALFMOVE`, 90) — an immediate cutoff if the bound qualifies: `EXACT` always, `LOWER` when `ttv >= beta`,
   `UPPER` when `ttv <= alpha`, where `ttv = valueFromTT(entry.value, ply)`. The
   `!pvNode` guard means the root (and every PV node) **never cuts**, so a move is always
   produced and the PV stays exact.
