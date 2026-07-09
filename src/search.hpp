@@ -65,6 +65,19 @@ struct Tunables {
 
     // Aspiration: initial half-window (cp) around the previous iteration's score.
     Value aspirationDelta = 15;
+
+    // Phase 1b forward-pruning margins (first-cut; SPSA-tunable via UCI). LMR base and
+    // divisor are stored x100 (integer knobs for the tuner) and divided when the LMR
+    // reduction table is built. Structural gates (min depths, move counts) stay
+    // constexpr in search.cpp.
+    int   lmrBase    = 78;  // LMR reduction offset, x100 (0.78)
+    int   lmrDivisor = 240; // LMR ln*ln divisor,  x100 (2.40); must stay >= 1
+    int   nmpBase    = 3;   // null-move base reduction R
+    int   nmpEvalDiv = 200; // null-move eval-margin divisor (cp of eval over beta per +1 R)
+    Value rfpMargin  = 80;  // reverse-futility margin per remaining ply (cp)
+    Value futMargin  = 90;  // futility margin per remaining ply (cp)
+    Value futBase    = 90;  // futility base margin (cp)
+    int   lmpBase    = 3;   // late-move-pruning quiet-count base (count = base + depth^2)
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
@@ -93,12 +106,20 @@ private:
     bool    checkStop();
     int64_t elapsedMs() const;
 
+    // LMR reduction table, rebuilt from tp_.lmrBase / tp_.lmrDivisor at the start of
+    // each search (they are UCI-tunable). Depth / move-count saturate at LMR_DIM.
+    void buildReductions();
+    int  lmrReduction(int depth, int moveCount) const;
+
+    static constexpr int LMR_DIM = 64;
+
     std::atomic<bool>&  stop_;
     TranspositionTable& tt_;
     Tunables            tp_;
     uint64_t            nodes_ = 0;
     History             history_;                // quiet-move ordering heuristics (per search)
     Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
+    uint8_t reductions_[LMR_DIM][LMR_DIM]{};     // LMR reduction table (see buildReductions)
 
     std::chrono::steady_clock::time_point start_{};
     int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)

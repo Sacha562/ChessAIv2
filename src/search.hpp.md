@@ -34,14 +34,17 @@ a [transposition table](tt.hpp.md).
 ## Namespace
 
 - Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the selective-search knobs —
-  `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, the `NMP_*`, `RFP_*`, `FUT_*`,
-  `LMP_MAX_DEPTH`, `LMR_*`, and `ASPIRATION_MIN_DEPTH` constants, plus the helpers
-  `lmrReduction` (a precomputed
-  `ln·ln` reduction table, lazily built once), `lmpCount`, and `hasNonPawnMaterial` —
-  live in an anonymous namespace in `search.cpp` (internal linkage). The margins are
-  first-cut and SPSA-tunable later. (The former `DELTA_MARGIN` / `ENDGAME_PIECES`
-  q-search constants are now runtime-tunable fields of [`Tunables`](#struct-tunables).)
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the **structural**
+  selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
+  `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
+  `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH` — plus the helpers `lmpCount`
+  and `hasNonPawnMaterial` live in an anonymous namespace in `search.cpp` (internal
+  linkage). The **pruning margins** that used to be `constexpr` (`NMP_BASE`,
+  `NMP_EVAL_DIV`, `RFP_MARGIN`, `FUT_MARGIN` / `FUT_BASE`, the LMR base/divisor, the LMP
+  base) are now **runtime-tunable [`Tunables`](#struct-tunables) fields** so SPSA can
+  perturb them; the LMR reduction table is a `Searcher` member rebuilt from them per
+  search ([`buildReductions`](#searcherbuildreductions)). (The former `DELTA_MARGIN` /
+  `ENDGAME_PIECES` q-search constants are likewise `Tunables` fields.)
 
 ## Objects / Interfaces
 
@@ -92,6 +95,21 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
+| `lmrBase` | `int` | `78` | LMR reduction offset ×100 (`LmrBase`); `0.78` in the curve. |
+| `lmrDivisor` | `int` | `240` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `2.40` in the curve (kept ≥ 1). |
+| `nmpBase` | `int` | `3` | Null-move base reduction `R` (`NmpBase`). |
+| `nmpEvalDiv` | `int` | `200` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `rfpMargin` | `Value` | `80` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
+| `futMargin` | `Value` | `90` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `90` | Futility base margin, cp (`FutBase`). |
+| `lmpBase` | `int` | `3` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+
+The **forward-pruning margins** (`lmrBase` … `lmpBase`) are first-cut, never-tuned values
+exposed for **SPSA** self-play tuning (they need to be UCI options, not `constexpr`, so a
+tuner can perturb them without a rebuild). Only the margins are tunable; the structural
+gates (min depths, `LMR_MIN_MOVES`, etc.) stay `constexpr`. `lmrBase` / `lmrDivisor` are
+integer-scaled ×100 because the tuner works in integers; they are divided when the LMR
+table is (re)built ([`buildReductions`](#searcherbuildreductions)).
 
 The `use*` toggles exist to **A/B-isolate** each Phase 1b signal's Elo (flip one on/off,
 run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via
@@ -129,6 +147,7 @@ just want the defaults).
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly history, countermoves) for this search. |
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
+| `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
 | `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
 | `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
@@ -138,7 +157,7 @@ just want the defaults).
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -340,6 +359,16 @@ last completed iteration's score). **Returns:** [`Value`](types.hpp.md#using-val
 gating to `depth >= 5` avoids the noisy shallow iterations. The final in-window search
 sets [`rootBest_`](#class-searcher) correctly; an aborted re-search (`timeUp_`) is
 discarded by [`think`](#searcherthink) like any incomplete iteration.
+
+### `Searcher::buildReductions` (private)
+
+(Re)build the `reductions_` LMR table from the tunable curve
+`r(depth, moveCount) ≈ lmrBase/100 + ln(depth)·ln(moveCount)/(lmrDivisor/100)`. Called
+once per search from [`think`](#searcherthink) (the base/divisor are UCI-tunable, so the
+table cannot be a compile-time constant). Row/column 0 stay 0 and are never indexed;
+`lmrDivisor` is floored at 1 to avoid a divide-by-zero. [`lmrReduction`](#searcherbuildreductions)
+reads the table with the depth/move-count saturated at `LMR_DIM - 1`, where reductions
+plateau. Rebuilding a 64×64 table once per `go` is negligible against a full search.
 
 ### `Searcher::qsearch` (private)
 

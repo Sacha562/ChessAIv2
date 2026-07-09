@@ -176,6 +176,24 @@ void Engine::handleSetOption(std::istringstream& is) {
         } else if (name == "AspirationDelta" && !value.empty()) {
             tunables_.aspirationDelta = std::clamp(std::stoi(value), 1, 500);
         }
+        // Phase 1b forward-pruning margins (SPSA-tunable). LMR base/divisor are x100.
+        else if (name == "LmrBase" && !value.empty()) {
+            tunables_.lmrBase = std::clamp(std::stoi(value), 0, 200);
+        } else if (name == "LmrDivisor" && !value.empty()) {
+            tunables_.lmrDivisor = std::clamp(std::stoi(value), 50, 500);
+        } else if (name == "NmpBase" && !value.empty()) {
+            tunables_.nmpBase = std::clamp(std::stoi(value), 1, 6);
+        } else if (name == "NmpEvalDiv" && !value.empty()) {
+            tunables_.nmpEvalDiv = std::clamp(std::stoi(value), 50, 600);
+        } else if (name == "RfpMargin" && !value.empty()) {
+            tunables_.rfpMargin = std::clamp(std::stoi(value), 10, 300);
+        } else if (name == "FutMargin" && !value.empty()) {
+            tunables_.futMargin = std::clamp(std::stoi(value), 10, 300);
+        } else if (name == "FutBase" && !value.empty()) {
+            tunables_.futBase = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "LmpBase" && !value.empty()) {
+            tunables_.lmpBase = std::clamp(std::stoi(value), 1, 12);
+        }
     } catch (...) { /* ignore malformed values */
     }
 }
@@ -210,6 +228,14 @@ void Engine::loop() {
                       << "option name UseCheckExt type spin default 1 min 0 max 1\n"
                       << "option name UseAspiration type spin default 1 min 0 max 1\n"
                       << "option name AspirationDelta type spin default 15 min 1 max 500\n"
+                      << "option name LmrBase type spin default 78 min 0 max 200\n"
+                      << "option name LmrDivisor type spin default 240 min 50 max 500\n"
+                      << "option name NmpBase type spin default 3 min 1 max 6\n"
+                      << "option name NmpEvalDiv type spin default 200 min 50 max 600\n"
+                      << "option name RfpMargin type spin default 80 min 10 max 300\n"
+                      << "option name FutMargin type spin default 90 min 10 max 300\n"
+                      << "option name FutBase type spin default 90 min 0 max 400\n"
+                      << "option name LmpBase type spin default 3 min 1 max 12\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

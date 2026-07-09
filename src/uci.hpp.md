@@ -92,7 +92,11 @@ losses to wins once LMP/LMR existed to consume them: history −23 → +247, IIR
 and the pruning /
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt`, `UseAspiration` (all default `1`) with `AspirationDelta` (`spin`, default
-`15`, the initial aspiration half-window in cp). Each is advertised in the `uci` reply as
+`15`, the initial aspiration half-window in cp), plus the **SPSA-tunable forward-pruning
+margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
+`NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase` — first-cut values
+exposed as `spin` options so a self-play tuner can perturb them without a rebuild. Each is
+advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
 **clamped to its advertised `min`/`max`** on store so an out-of-range value (e.g. a raw
 spin from a tuner) can never reach the search as an out-of-bounds int. The advertised `default`

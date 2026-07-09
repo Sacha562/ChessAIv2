@@ -6,7 +6,6 @@
 #include "chess.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -29,28 +28,20 @@ constexpr int64_t TIME_CHECK_MASK  = 2047; // check clock every 2048 nodes
 constexpr int IIR_MIN_DEPTH = 4;
 
 // Null-move pruning: give the opponent a free move at reduced depth; a position still
-// >= beta is assumed too good and pruned. R grows with depth and the eval margin.
+// >= beta is assumed too good and pruned. R grows with depth and the eval margin (the
+// base and eval divisor are tunable — Tunables::nmpBase / nmpEvalDiv).
 constexpr int NMP_MIN_DEPTH = 3;
-constexpr int NMP_BASE      = 3;
 constexpr int NMP_DIV       = 3;
-constexpr int NMP_EVAL_DIV  = 200;
 constexpr int NMP_EVAL_MAX  = 3;
 
-// Reverse futility (static null-move) pruning: near the horizon, a static eval this
-// far above beta is assumed to hold.
-constexpr int   RFP_MAX_DEPTH = 6;
-constexpr Value RFP_MARGIN    = 80; // per remaining ply
-
-// Futility pruning of quiets: near the horizon, a quiet the static eval (plus a
-// margin) still cannot lift to alpha is skipped.
-constexpr int   FUT_MAX_DEPTH = 6;
-constexpr Value FUT_MARGIN    = 90; // per remaining ply
-constexpr Value FUT_BASE      = 90;
-
-// Late-move (move-count) pruning: past a depth-scaled quiet count, skip the rest.
+// Depth gates for the shallow forward-pruning trio (their margins are tunable Tunables
+// fields: rfpMargin, futMargin/futBase, lmpBase).
+constexpr int RFP_MAX_DEPTH = 6;
+constexpr int FUT_MAX_DEPTH = 6;
 constexpr int LMP_MAX_DEPTH = 6;
 
-// Late move reductions: reduce late quiets; re-search if one beats alpha.
+// Late move reductions: reduce late quiets; re-search if one beats alpha. The reduction
+// curve (base/divisor) is tunable — see Searcher::buildReductions.
 constexpr int LMR_MIN_DEPTH = 3;
 constexpr int LMR_MIN_MOVES = 2; // start reducing at the 3rd move
 
@@ -61,25 +52,10 @@ constexpr int ASPIRATION_MIN_DEPTH = 5;
 // draw; otherwise a stored score can't be trusted (it may ignore the looming draw).
 constexpr int TT_CUTOFF_MAX_HALFMOVE = 90;
 
-// LMR reduction r(depth, moveCount) ~= 0.78 + ln(depth)*ln(moveCount)/2.4, precomputed
-// once over a square table whose indices saturate (reductions plateau by then).
-// Thread-safe static init.
-constexpr int LMR_TABLE_DIM = 64;
-int           lmrReduction(int depth, int moveCount) {
-    static const std::array<std::array<uint8_t, LMR_TABLE_DIM>, LMR_TABLE_DIM> table = [] {
-        std::array<std::array<uint8_t, LMR_TABLE_DIM>, LMR_TABLE_DIM> t{};
-        for (int d = 1; d < LMR_TABLE_DIM; ++d)
-            for (int m = 1; m < LMR_TABLE_DIM; ++m)
-                t[d][m] = static_cast<uint8_t>(0.78 + std::log(d) * std::log(m) / 2.4);
-        return t;
-    }();
-    return table[std::min(depth, LMR_TABLE_DIM - 1)][std::min(moveCount, LMR_TABLE_DIM - 1)];
-}
-
 // Quiet move-count threshold for LMP at `depth`; fewer when the eval is not improving.
-int lmpCount(int depth, bool improving) {
-    const int base = 3 + depth * depth;
-    return improving ? base : base / 2;
+int lmpCount(int depth, bool improving, int base) {
+    const int count = base + depth * depth;
+    return improving ? count : count / 2;
 }
 
 // Does `stm` have any piece heavier than a pawn? Zugzwang guard for null-move pruning.
@@ -165,6 +141,22 @@ void Searcher::setupTiming(const Limits& limits, const Board& board) {
     hardLimitMs_ = std::max<int64_t>(1, hard);
 }
 
+// (Re)build the LMR reduction table from the tunable curve
+// r(depth, moveCount) ~= lmrBase/100 + ln(depth)*ln(moveCount)/(lmrDivisor/100).
+// Called once per search (the base/divisor are UCI-tunable); indices saturate at
+// LMR_DIM, where reductions plateau. Row/column 0 stay 0 (never indexed).
+void Searcher::buildReductions() {
+    const double base = tp_.lmrBase / 100.0;
+    const double div  = std::max(1, tp_.lmrDivisor) / 100.0;
+    for (int d = 1; d < LMR_DIM; ++d)
+        for (int m = 1; m < LMR_DIM; ++m)
+            reductions_[d][m] = static_cast<uint8_t>(base + std::log(d) * std::log(m) / div);
+}
+
+int Searcher::lmrReduction(int depth, int moveCount) const {
+    return reductions_[std::min(depth, LMR_DIM - 1)][std::min(moveCount, LMR_DIM - 1)];
+}
+
 Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove) {
     if (timeUp_) return VALUE_ZERO;
 
@@ -221,15 +213,16 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     if (!pvNode && !inCheck && std::abs(beta) < VALUE_MATE_IN_MAX_PLY) {
         // Reverse futility pruning (static null-move): a static eval this far above
         // beta near the horizon is assumed to hold.
-        if (tp_.useRfp && depth <= RFP_MAX_DEPTH && eval - RFP_MARGIN * depth >= beta) return eval;
+        if (tp_.useRfp && depth <= RFP_MAX_DEPTH && eval - tp_.rfpMargin * depth >= beta)
+            return eval;
 
         // Null-move pruning: skip a turn; if the position is still >= beta at reduced
         // depth it is too good, so prune. Guarded against zugzwang (needs non-pawn
         // material) and a below-beta eval.
         if (tp_.useNmp && depth >= NMP_MIN_DEPTH && eval >= beta &&
             hasNonPawnMaterial(board, board.sideToMove())) {
-            const int R = NMP_BASE + depth / NMP_DIV +
-                          std::min<int>((eval - beta) / NMP_EVAL_DIV, NMP_EVAL_MAX);
+            const int R = tp_.nmpBase + depth / NMP_DIV +
+                          std::min<int>((eval - beta) / tp_.nmpEvalDiv, NMP_EVAL_MAX);
             board.makeNullMove();
             const Value nullScore =
                 -search(board, depth - 1 - R, -beta, -beta + 1, ply + 1, Move(Move::NO_MOVE));
@@ -265,12 +258,13 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         // been searched, and not while being mated (we still need an escape).
         if (!pvNode && !inCheck && isQuiet && moveCount > 1 && best > VALUE_MATED_IN_MAX_PLY) {
             // Late move pruning: past a depth-scaled quiet count, skip the rest.
-            if (tp_.useLmp && depth <= LMP_MAX_DEPTH && moveCount >= lmpCount(depth, improving))
+            if (tp_.useLmp && depth <= LMP_MAX_DEPTH &&
+                moveCount >= lmpCount(depth, improving, tp_.lmpBase))
                 continue;
             // Futility pruning: a quiet the static eval plus a margin cannot lift to
             // alpha near the horizon.
             if (tp_.useFutility && depth <= FUT_MAX_DEPTH &&
-                eval + FUT_MARGIN * depth + FUT_BASE <= alpha)
+                eval + tp_.futMargin * depth + tp_.futBase <= alpha)
                 continue;
         }
 
@@ -443,6 +437,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     timeUp_ = false;
     tt_.newSearch();
     history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove);
+    buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
 
