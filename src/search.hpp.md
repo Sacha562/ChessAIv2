@@ -81,7 +81,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
-| `useHistory` | `bool` | `false` | Enable the butterfly-history ordering signal (`UseHistory`). |
+| `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
 | `useIir` | `bool` | `false` | Enable Internal Iterative Reduction (`UseIIR`). |
 | `useNmp` | `bool` | `true` | Enable null-move pruning (`UseNMP`). |
@@ -102,12 +102,13 @@ run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via
 [`aspirationSearch`](#searcheraspirationsearch). With every selective toggle off the
 search reproduces the plain PVS + step-1-ordering engine.
 
-**Default rationale (Phase 1b step-1 A/B, 1000 games/signal @ 8+0.08 vs the pre-step-1
-build):** killers **+44 Elo** and countermove **~0** are **on**; butterfly history
-**−23** and IIR **−36** are **off**. History reorders quiets worse than the default
-movegen order until the reductions that consume it (LMR/LMP, PLAN.md Part 4) exist, and
-this IIR fires at every node type — both are deferred (kept wired and UCI-tunable) until
-LMR lands to make them pay and, for IIR, to gate it (non-PV / cut-node).
+**Default rationale (A/B @ 8+0.08 vs the same binary):** killers **+44 Elo** and
+countermove **~0** are **on**. Butterfly **history** measured **−23** in step 1 (no
+pruning) but **+247** once the full pruning stack exists — LMP/LMR discard late-ordered
+quiets, so good quiet ordering is what stops them from pruning a winning move
+("ordering makes pruning safe", PLAN.md Part 4); it is now **on**. **IIR** was **−36** in
+step 1 and is retested against the pruning stack separately, so it stays **off** for now.
+All four remain wired and UCI-tunable for per-signal A/B isolation.
 
 **Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::think`](#searcherthink), [`Searcher::search`](#searchersearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 

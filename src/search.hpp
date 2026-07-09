@@ -42,13 +42,14 @@ struct Tunables {
     Value deltaMargin   = 203; // delta-pruning safety cushion (centipawns)
     int   endgamePieces = 7;   // total pieces at/below which delta pruning is off
 
-    // Ordering-heuristic on/off toggles. Defaults reflect the Phase 1b step-1 A/B
-    // result: killers (+44 Elo) and countermove (~0) are on; butterfly history (-23)
-    // and IIR (-36) are off, deferred until LMR — the pruning layer whose reductions
-    // consume history and whose gating IIR needs — lands to make them pay (PLAN.md
-    // Part 4). All four stay wired (and tunable via UCI) so they re-enable cheaply.
+    // Ordering-heuristic on/off toggles. Killers (+44 Elo) and countermove (~0) are on.
+    // Butterfly history was -23 Elo in step 1 (no pruning) but is +247 once LMP/LMR
+    // exist: they prune/reduce late-ordered quiets, so good quiet ordering is what keeps
+    // them from discarding a winning move (PLAN.md Part 4 — "ordering makes pruning
+    // safe"). IIR was -36 in step 1 and is retested separately, so it stays off. All
+    // four stay wired (and UCI-tunable) for A/B isolation.
     bool useKillers     = true;
-    bool useHistory     = false;
+    bool useHistory     = true;
     bool useCountermove = true;
     bool useIir         = false;
 
