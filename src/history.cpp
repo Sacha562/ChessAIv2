@@ -47,10 +47,12 @@ void History::clear() {
 }
 
 int History::quietScore(Color stm, Move move) const {
+    if (!useHistory_) return 0;
     return butterfly_[stm][move.from().index()][move.to().index()];
 }
 
 Move History::killer(int ply, int slot) const {
+    if (!useKillers_) return Move(Move::NO_MOVE);
     return killers_[ply][slot];
 }
 
@@ -62,6 +64,7 @@ int History::counterIndex(const Board& board, Move prevMove) {
 }
 
 Move History::counter(const Board& board, Move prevMove) const {
+    if (!useCounter_) return Move(Move::NO_MOVE);
     const int idx = counterIndex(board, prevMove);
     return idx < 0 ? Move(Move::NO_MOVE) : counters_[idx];
 }

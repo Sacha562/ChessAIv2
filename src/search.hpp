@@ -41,6 +41,12 @@ struct Tunables {
     // Quiescence delta pruning.
     Value deltaMargin   = 203; // delta-pruning safety cushion (centipawns)
     int   endgamePieces = 7;   // total pieces at/below which delta pruning is off
+
+    // Ordering-heuristic on/off toggles (for A/B isolation of each signal; all on).
+    bool useKillers     = true;
+    bool useHistory     = true;
+    bool useCountermove = true;
+    bool useIir         = true;
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation

@@ -134,7 +134,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 
     // Internal Iterative Reduction: with no hash move, ordering is unreliable, so
     // search shallower and let the reduced search supply a TT move for next time.
-    if (depth >= IIR_MIN_DEPTH && ttMove == Move(Move::NO_MOVE)) --depth;
+    if (tp_.useIir && depth >= IIR_MIN_DEPTH && ttMove == Move(Move::NO_MOVE)) --depth;
 
     Movelist moves;
     movegen::legalmoves(moves, board);
@@ -279,6 +279,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     nodes_  = 0;
     timeUp_ = false;
     tt_.newSearch();
+    history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove);
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
 

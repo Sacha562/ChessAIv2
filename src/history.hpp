@@ -36,6 +36,15 @@ public:
     // Reset every table to empty (all-zero history, all-NO_MOVE killers/counters).
     void clear();
 
+    // Enable/disable each signal independently. A disabled signal returns "empty" from
+    // its query (so it has no ordering effect) while still being updated cheaply. Used
+    // to A/B-isolate each heuristic's Elo via UCI toggles; all default on.
+    void setEnabled(bool killers, bool history, bool countermove) {
+        useKillers_ = killers;
+        useHistory_ = history;
+        useCounter_ = countermove;
+    }
+
     // --- Queries (hot path: read once per move during ordering) ---
 
     // Butterfly-history score of quiet `move` for side `stm`, in
@@ -74,6 +83,10 @@ private:
     int16_t butterfly_[NUM_COLORS][NUM_SQUARES][NUM_SQUARES];
     Move    killers_[MAX_PLY][NUM_KILLERS];
     Move    counters_[NUM_PIECES * NUM_SQUARES];
+
+    bool useKillers_ = true; // per-signal on/off for A/B isolation (see setEnabled)
+    bool useHistory_ = true;
+    bool useCounter_ = true;
 };
 
 } // namespace engine

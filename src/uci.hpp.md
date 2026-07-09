@@ -45,7 +45,7 @@ and run by [`run_uci`](#run_uci).
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
-| `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
+| `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`, ordering toggles `UseKillers` / `UseHistory` / `UseCountermove` / `UseIIR`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
 
 ## Functions
 
@@ -85,10 +85,12 @@ reading input.
 Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or a
 field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
-and `EndgamePieces` — each advertised in the `uci` reply as a `spin` option so a
-self-play tuner (SPSA) can perturb it without a rebuild, and each **clamped to its
-advertised `min`/`max`** on store so an out-of-range value (e.g. a raw spin from a
-tuner) can never reach the search as an out-of-bounds int. The advertised `default`
+and `EndgamePieces`, plus the ordering-heuristic on/off toggles `UseKillers`,
+`UseHistory`, `UseCountermove`, and `UseIIR` (`spin`, `0`/`1`, default `1`) used to
+A/B-isolate each Phase 1b step-1 signal's Elo — each advertised in the `uci` reply as
+a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
+**clamped to its advertised `min`/`max`** on store so an out-of-range value (e.g. a raw
+spin from a tuner) can never reach the search as an out-of-bounds int. The advertised `default`
 for `Tempo`, `DeltaMargin`, and `EndgamePieces` matches the corresponding
 [`Tunables`](search.hpp.md#struct-tunables) field, whose values were set from an SPSA
 self-play tune. Setting `Hash` first calls [`stopSearch`](#enginestopsearch) (no

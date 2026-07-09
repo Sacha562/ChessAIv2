@@ -70,8 +70,19 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `tempo` | `Value` | `9` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
 | `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
+| `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
+| `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
+| `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
+| `useIir` | `bool` | `true` | Enable Internal Iterative Reduction (`UseIIR`). |
 
-**Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
+The four `use*` toggles exist to **A/B-isolate** each Phase 1b step-1 signal's Elo: with
+all off the search reproduces the pre-step-1 ordering (verified — identical node counts),
+and flipping one on measures that signal's marginal contribution. `useKillers` /
+`useHistory` / `useCountermove` are applied via
+[`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top of
+[`think`](#searcherthink)); `useIir` gates the IIR step in [`search`](#searchersearch).
+
+**Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::think`](#searcherthink), [`Searcher::search`](#searchersearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 
 ### `class Searcher`
 
@@ -151,8 +162,9 @@ The recursive fail-soft negamax, refined with **Principal Variation Search** (re
 **[`orderMoves`](movepick.hpp.md#ordermoves)** → **PVS move loop** (with quiet-cutoff
 heuristic updates) → **TT store**.
 
-**Internal Iterative Reduction (IIR):** when a node has real depth (`>= IIR_MIN_DEPTH`,
-currently 4) but the TT probe returned **no move**, ordering has nothing to lead with,
+**Internal Iterative Reduction (IIR):** (gated by [`tp_.useIir`](#struct-tunables)) when
+a node has real depth (`>= IIR_MIN_DEPTH`, currently 4) but the TT probe returned **no
+move**, ordering has nothing to lead with,
 so a full-depth search is likely wasted behind a poor first move. `depth` is reduced by
 one ply before movegen; the cheaper search leaves a TT move behind that a later
 re-visit (or the same iterative-deepening line one ply up) can order on. The reduced

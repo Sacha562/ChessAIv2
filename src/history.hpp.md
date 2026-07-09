@@ -54,11 +54,12 @@ all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
 | `butterfly_` | `int16_t[2][64][64]` | Per (color, from, to) cutoff score, bounded to `±MAX_HISTORY`. |
 | `killers_` | `Move[MAX_PLY][2]` | Two killer moves per ply; slot 0 is the most recent. |
 | `counters_` | `Move[12 * 64]` | Countermove keyed by the previous move's piece (0–11) × target square. |
+| `useKillers_` / `useHistory_` / `useCounter_` | `bool` | Per-signal on/off (default on); set by [`setEnabled`](#historysetenabled). |
 
-**Methods:** [`clear`](#historyclear), [`quietScore`](#historyquietscore),
-[`killer`](#historykiller), [`counter`](#historycounter),
-[`updateQuietCutoff`](#historyupdatequietcutoff) (public);
-`counterIndex` (private helper).
+**Methods:** [`clear`](#historyclear), [`setEnabled`](#historysetenabled),
+[`quietScore`](#historyquietscore), [`killer`](#historykiller),
+[`counter`](#historycounter), [`updateQuietCutoff`](#historyupdatequietcutoff)
+(public); `counterIndex` (private helper).
 
 **Used by:** [`Searcher`](search.hpp.md#class-searcher) (owns one),
 [`orderMoves`](movepick.hpp.md#ordermoves) (reads the queries).
@@ -69,11 +70,26 @@ all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
 
 Reset every table to empty. Called by the constructor; available for reuse/tests.
 `butterfly_` is zeroed; every killer and countermove slot is set to `Move::NO_MOVE`.
+Does **not** touch the `setEnabled` toggles (they are configuration, not per-search
+state).
+
+### `History::setEnabled`
+
+Enable or disable each signal independently: `setEnabled(killers, history,
+countermove)`. A disabled signal's query returns "empty" (`quietScore` → `0`, `killer`
+→ `NO_MOVE`, `counter` → `NO_MOVE`) so it has no ordering effect, while the (cheap)
+updates keep running. Set once per search from
+[`Tunables`](search.hpp.md#struct-tunables) at the top of
+[`Searcher::think`](search.hpp.md#searcherthink), driven by the `UseKillers` /
+`UseHistory` / `UseCountermove` UCI options. Exists to **A/B-isolate** each signal's
+Elo — with all three off (and `UseIIR` off) the search reproduces the pre-step-1
+ordering exactly.
 
 ### `History::quietScore`
 
 Butterfly-history score of a quiet `move` for side `stm`, in
 `[-MAX_HISTORY, MAX_HISTORY]`. Higher means "this move cut more often here before."
+Returns `0` when the history signal is disabled ([`setEnabled`](#historysetenabled)).
 
 **Parameters:** `stm` (`Color`), `move` (`Move`, indexed by `from()`/`to()`).
 **Returns:** `int`. Hot path — a plain array read.

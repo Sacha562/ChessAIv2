@@ -150,6 +150,16 @@ void Engine::handleSetOption(std::istringstream& is) {
         } else if (name == "EndgamePieces" && !value.empty()) {
             tunables_.endgamePieces = std::clamp(std::stoi(value), 0, 32);
         }
+        // Ordering-heuristic toggles (0/1) — for A/B-isolating each signal's Elo.
+        else if (name == "UseKillers" && !value.empty()) {
+            tunables_.useKillers = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseHistory" && !value.empty()) {
+            tunables_.useHistory = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseCountermove" && !value.empty()) {
+            tunables_.useCountermove = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseIIR" && !value.empty()) {
+            tunables_.useIir = std::clamp(std::stoi(value), 0, 1) != 0;
+        }
     } catch (...) { /* ignore malformed values */
     }
 }
@@ -172,6 +182,10 @@ void Engine::loop() {
                       << "option name Tempo type spin default 9 min 0 max 100\n"
                       << "option name DeltaMargin type spin default 203 min 0 max 1000\n"
                       << "option name EndgamePieces type spin default 7 min 0 max 32\n"
+                      << "option name UseKillers type spin default 1 min 0 max 1\n"
+                      << "option name UseHistory type spin default 1 min 0 max 1\n"
+                      << "option name UseCountermove type spin default 1 min 0 max 1\n"
+                      << "option name UseIIR type spin default 1 min 0 max 1\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;
