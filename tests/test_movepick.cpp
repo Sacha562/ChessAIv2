@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include "chess.hpp"
+#include "history.hpp"
 #include "movepick.hpp"
 #include "see.hpp"
 
@@ -14,10 +15,18 @@ using namespace chess;
 
 namespace {
 
+// An empty heuristics table: no killers, no countermoves, all-zero history — so
+// these ordering tests exercise the bucket structure, not the quiet signals.
+const History NO_HIST;
+const Move    NO_MOVE = Move(Move::NO_MOVE);
+
+void order(const Board& b, Movelist& ml, Move ttMove) {
+    orderMoves(b, ml, ttMove, NO_HIST, /*ply=*/0, /*prevMove=*/NO_MOVE);
+}
+
 // 2 = winning/equal capture (SEE >= 0), 1 = quiet, 0 = losing capture (SEE < 0).
 int category(const Board& b, Move m) {
-    if (!b.isCapture(m))
-        return 1;
+    if (!b.isCapture(m)) return 1;
     return seeGE(b, m, 0) ? 2 : 0;
 }
 
@@ -38,9 +47,9 @@ TEST_CASE("orderMoves groups good captures, then quiets, then losing captures") 
         Board    b(fen);
         Movelist ml;
         movegen::legalmoves(ml, b);
-        orderMoves(b, ml, Move(Move::NO_MOVE));
+        order(b, ml, NO_MOVE);
 
-        int prev = 2;   // categories descend 2 -> 1 -> 0 and never climb back
+        int prev = 2; // categories descend 2 -> 1 -> 0 and never climb back
         for (int i = 0; i < ml.size(); ++i) {
             const int c = category(b, ml[i]);
             CHECK(c <= prev);
@@ -55,8 +64,8 @@ TEST_CASE("orderMoves puts the TT move first") {
     movegen::legalmoves(ml, b);
     REQUIRE(ml.size() > 1);
 
-    const Move tt = ml[ml.size() - 1];   // a move that is not otherwise first
-    orderMoves(b, ml, tt);
+    const Move tt = ml[ml.size() - 1]; // a move that is not otherwise first
+    order(b, ml, tt);
     CHECK(ml[0] == tt);
 }
 
@@ -64,10 +73,10 @@ TEST_CASE("mvvLva ranks by victim value, then by (cheaper) attacker") {
     // White pawn c4 attacks queen b5 and rook d5; white queen d1 also attacks d5.
     Board b("4k3/8/8/1q1r4/2P5/8/8/3QK3 w - - 0 1");
 
-    const int pxq = mvvLva(b, parse(b, "c4b5"));   // pawn takes queen
-    const int pxr = mvvLva(b, parse(b, "c4d5"));   // pawn takes rook
-    const int qxr = mvvLva(b, parse(b, "d1d5"));   // queen takes rook
+    const int pxq = mvvLva(b, parse(b, "c4b5")); // pawn takes queen
+    const int pxr = mvvLva(b, parse(b, "c4d5")); // pawn takes rook
+    const int qxr = mvvLva(b, parse(b, "d1d5")); // queen takes rook
 
-    CHECK(pxq > pxr);   // most-valuable victim wins
-    CHECK(pxr > qxr);   // same victim: least-valuable attacker wins
+    CHECK(pxq > pxr); // most-valuable victim wins
+    CHECK(pxr > qxr); // same victim: least-valuable attacker wins
 }

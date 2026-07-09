@@ -19,6 +19,11 @@ namespace {
 constexpr int64_t MOVE_OVERHEAD_MS = 30;
 constexpr int64_t TIME_CHECK_MASK  = 2047; // check clock every 2048 nodes
 
+// Internal Iterative Reduction: at a node this deep with no TT move to lead ordering,
+// search one ply shallower rather than pay for a full-depth search behind a poor first
+// move — the reduced search leaves a TT move behind for the re-search. SPSA-tunable.
+constexpr int IIR_MIN_DEPTH = 4;
+
 // Format a score for a UCI `info ... score` field.
 std::string scoreToUci(Value v) {
     std::ostringstream ss;
@@ -95,7 +100,7 @@ void Searcher::setupTiming(const Limits& limits, const Board& board) {
     hardLimitMs_ = std::max<int64_t>(1, hard);
 }
 
-Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply) {
+Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove) {
     if (timeUp_) return VALUE_ZERO;
 
     ++nodes_;
@@ -127,20 +132,27 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         }
     }
 
+    // Internal Iterative Reduction: with no hash move, ordering is unreliable, so
+    // search shallower and let the reduced search supply a TT move for next time.
+    if (depth >= IIR_MIN_DEPTH && ttMove == Move(Move::NO_MOVE)) --depth;
+
     Movelist moves;
     movegen::legalmoves(moves, board);
 
     if (moves.empty()) return board.inCheck() ? mated_in(ply) : VALUE_DRAW;
 
-    // Order: TT move, then winning/equal captures (SEE >= 0, MVV-LVA), quiets, then
-    // losing captures (SEE < 0). The single biggest lever on search speed.
-    orderMoves(board, moves, ttMove);
+    // Order: TT move, then winning/equal captures (SEE >= 0), killers, countermove,
+    // history-scored quiets, then losing captures. The single biggest lever on speed.
+    orderMoves(board, moves, ttMove, history_, ply, prevMove);
 
     Value best      = -VALUE_INFINITE;
     Move  bestMove  = Move(Move::NO_MOVE);
     int   moveCount = 0;
+    Move  quietsTried[constants::MAX_MOVES];
+    int   nQuietsTried = 0;
     for (const auto& m : moves) {
         ++moveCount;
+        const bool isQuiet = !board.isCapture(m);
         tt_.prefetch(board.zobristAfter(m));
         board.makeMove(m);
 
@@ -153,11 +165,11 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         // full window, so the guard skips a redundant re-search.)
         Value score;
         if (moveCount == 1) {
-            score = -search(board, depth - 1, -beta, -alpha, ply + 1);
+            score = -search(board, depth - 1, -beta, -alpha, ply + 1, m);
         } else {
-            score = -search(board, depth - 1, -alpha - 1, -alpha, ply + 1);
+            score = -search(board, depth - 1, -alpha - 1, -alpha, ply + 1, m);
             if (score > alpha && score < beta)
-                score = -search(board, depth - 1, -beta, -alpha, ply + 1);
+                score = -search(board, depth - 1, -beta, -alpha, ply + 1, m);
         }
 
         board.unmakeMove(m);
@@ -170,7 +182,15 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             if (ply == 0) rootBest_ = m;
         }
         if (score > alpha) alpha = score;
-        if (alpha >= beta) break; // fail-high cutoff
+        if (alpha >= beta) {
+            // Fail-high cutoff. A quiet cutoff teaches move ordering: reward this move,
+            // penalise the quiets tried before it, and record killer / countermove.
+            if (isQuiet)
+                history_.updateQuietCutoff(board, board.sideToMove(), ply, depth, prevMove, m,
+                                           quietsTried, nQuietsTried);
+            break;
+        }
+        if (isQuiet) quietsTried[nQuietsTried++] = m;
     }
 
     const Bound bound = best >= beta ? BOUND_LOWER : best > alphaOrig ? BOUND_EXACT : BOUND_UPPER;
@@ -211,7 +231,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     if (inCheck) {
         movegen::legalmoves(moves, board);
         if (moves.empty()) return mated_in(ply); // checkmate
-        orderMoves(board, moves, Move(Move::NO_MOVE));
+        orderMoves(board, moves, Move(Move::NO_MOVE), history_, ply, Move(Move::NO_MOVE));
     } else {
         // Not in check: only captures. An empty list here means "no captures", not
         // necessarily "no moves" — so a stalemate is scored as its (quiet) stand-pat
@@ -275,12 +295,15 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
 
     setupTiming(limits, board);
 
-    const int maxDepth = (limits.depth > 0) ? limits.depth : MAX_PLY - 1;
+    // Cap at MAX_PLY - 1: ply indexes fixed-size per-ply tables (killers), and with no
+    // extensions yet a node's ply never exceeds the root depth. Clamp so a large
+    // `go depth N` can never drive ply out of those tables.
+    const int maxDepth = std::min((limits.depth > 0) ? limits.depth : MAX_PLY - 1, MAX_PLY - 1);
     Value     score    = VALUE_ZERO;
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
         rootBest_ = Move(Move::NO_MOVE);
-        Value v   = search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0);
+        Value v   = search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0, Move(Move::NO_MOVE));
 
         if (timeUp_) break; // incomplete iteration: keep previous best
 

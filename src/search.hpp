@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include "history.hpp"
 #include "types.hpp"
 
 namespace engine {
@@ -61,7 +62,7 @@ public:
     uint64_t nodes() const { return nodes_; }
 
 private:
-    Value   search(Board& board, int depth, Value alpha, Value beta, int ply);
+    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove);
     Value   qsearch(Board& board, Value alpha, Value beta, int ply);
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
@@ -71,6 +72,7 @@ private:
     TranspositionTable& tt_;
     Tunables            tp_;
     uint64_t            nodes_ = 0;
+    History             history_; // quiet-move ordering heuristics (per search)
 
     std::chrono::steady_clock::time_point start_{};
     int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)

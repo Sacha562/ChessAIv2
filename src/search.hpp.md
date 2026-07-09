@@ -8,16 +8,17 @@ entries, streams UCI `info` lines, and returns the best root move. Driven by
 [uci](uci.hpp.md) (for live play) and [bench](bench.hpp.md) (for the deterministic
 benchmark).
 
-The evaluation is still static material only. The pruning stack and the rest of the
-move-ordering stack (killers, history) arrive later in Phases 1a–1b (see
-[PLAN.md](../PLAN.md) Parts 2–4). **Phase 1a step 2** added the soft/hard time
-manager; **step 3** added the [`TranspositionTable`](tt.hpp.md) probe/cutoff and
-store; **step 4** added [`see`](see.hpp.md) (Static Exchange Evaluation); **step 5**
-added the [`qsearch`](#searcherqsearch) quiescence layer at the leaf; **step 6**
-replaced the TT-move-only ordering with full [`movepick`](movepick.hpp.md) ordering
-(TT move → good captures → quiets → losing captures); and **step 7** turned the
-full-window move loop into fail-soft PVS. Aspiration windows
-([PLAN.md](../PLAN.md) Component 6) are the remaining Phase 1a search-core item.
+The evaluation is still static material only. The forward-pruning stack (null-move,
+LMR, futility/LMP) arrives later in Phase 1b (see [PLAN.md](../PLAN.md) Parts 2–4).
+**Phase 1a step 2** added the soft/hard time manager; **step 3** added the
+[`TranspositionTable`](tt.hpp.md) probe/cutoff and store; **step 4** added
+[`see`](see.hpp.md) (Static Exchange Evaluation); **step 5** added the
+[`qsearch`](#searcherqsearch) quiescence layer at the leaf; **step 6** replaced the
+TT-move-only ordering with full [`movepick`](movepick.hpp.md) ordering; and **step 7**
+turned the full-window move loop into fail-soft PVS. **Phase 1b step 1** added the
+quiet-move ordering heuristics ([`History`](history.hpp.md): killers, butterfly
+history with malus, countermoves) and **Internal Iterative Reduction** (IIR). Aspiration
+windows ([PLAN.md](../PLAN.md) Component 6) are the remaining search-core item.
 
 ## Source Files
 
@@ -27,8 +28,8 @@ full-window move loop into fail-soft PVS. Aspiration windows
 ## Namespace
 
 - Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, and `scoreToUci` live in an anonymous
-  namespace in `search.cpp` — internal linkage. (The former `DELTA_MARGIN` /
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `IIR_MIN_DEPTH`, and `scoreToUci` live in an
+  anonymous namespace in `search.cpp` — internal linkage. (The former `DELTA_MARGIN` /
   `ENDGAME_PIECES` q-search constants are now runtime-tunable fields of
   [`Tunables`](#struct-tunables).)
 
@@ -87,6 +88,7 @@ just want the defaults).
 | `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
+| `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly history, countermoves) for this search. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
 | `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
 | `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
@@ -131,7 +133,10 @@ shared `stop_` flag.
 `think` never returns a null move in a non-terminal position even if aborted at
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
 stands). Soft stop: once elapsed time reaches [`softLimitMs_`](#class-searcher) no
-new depth is started; the current depth may still run until the hard limit.
+new depth is started; the current depth may still run until the hard limit. The
+iterative-deepening cap is clamped to `MAX_PLY - 1` even when `go depth N` requests a
+larger `N`, so a node's `ply` can never overrun the fixed per-ply tables (the
+[`History`](history.hpp.md) killers) it indexes.
 
 ### `Searcher::nodes`
 
@@ -142,8 +147,22 @@ Return `uint64_t` — nodes visited in the current/last search. Read by
 
 The recursive fail-soft negamax, refined with **Principal Variation Search** (returns
 `best`). Order of operations: draw check → **leaf → [`qsearch`](#searcherqsearch)**
-(when `depth <= 0`) → **TT probe** → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)**
-→ **PVS move loop** → **TT store**.
+(when `depth <= 0`) → **TT probe** → **IIR** → movegen →
+**[`orderMoves`](movepick.hpp.md#ordermoves)** → **PVS move loop** (with quiet-cutoff
+heuristic updates) → **TT store**.
+
+**Internal Iterative Reduction (IIR):** when a node has real depth (`>= IIR_MIN_DEPTH`,
+currently 4) but the TT probe returned **no move**, ordering has nothing to lead with,
+so a full-depth search is likely wasted behind a poor first move. `depth` is reduced by
+one ply before movegen; the cheaper search leaves a TT move behind that a later
+re-visit (or the same iterative-deepening line one ply up) can order on. The reduced
+depth is also what is stored in the TT, correctly reflecting the work actually done.
+
+**Quiet-cutoff learning:** on a fail-high (`alpha >= beta`) caused by a **quiet** move,
+[`history_.updateQuietCutoff`](history.hpp.md#historyupdatequietcutoff) rewards that move,
+penalises the quiet moves tried before it (tracked in a per-node `quietsTried` stack
+array), and updates killers and the countermove for `prevMove`. Capture cutoffs do not
+touch history. These signals feed the next node's `orderMoves`.
 
 **Principal Variation Search (PVS):** the first (best-ordered) move is searched on the
 full `[alpha, beta]` window to establish the principal variation. Every later move is
@@ -172,6 +191,7 @@ an alpha-raising move, so the reported score stays exact and deterministic.
 | `alpha` | `Value` | Lower bound of the search window. |
 | `beta` | `Value` | Upper bound of the search window. |
 | `ply` | `int` | Distance from the root (for mate scoring and root-move tracking). |
+| `prevMove` | `Move` | The move played at the parent node (`Move::NO_MOVE` at the root); keys the countermove and is the malus/history side-to-move context. |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — the negamax score of
 `board`. `mated_in(ply)` at checkmate, `VALUE_DRAW` at stalemate/draw, `VALUE_ZERO`
@@ -185,15 +205,18 @@ when aborting (`timeUp_`).
   `ttv = valueFromTT(entry.value, ply)`. **Never cuts at the root** so a move is
   always produced.
 - **Ordering**: the probed TT move is passed to
-  [`orderMoves`](movepick.hpp.md#ordermoves), which floats it first and then sorts the
-  remaining moves (good captures by SEE+MVV-LVA, quiets, losing captures).
+  [`orderMoves`](movepick.hpp.md#ordermoves) together with [`history_`](history.hpp.md),
+  the `ply`, and `prevMove`, which floats the TT move first and then sorts the rest
+  (good captures by SEE+MVV-LVA, killers, countermove, history-scored quiets, losing
+  captures).
 - **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the
   best move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`,
   else `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`.
 - **Prefetch**: `tt_.prefetch(board.zobristAfter(m))` before each `makeMove`.
 
-**Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`
-and, at `ply == 0`, `rootBest_`; periodically calls `checkStop`.
+**Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`,
+`history_` (on quiet cutoffs), and, at `ply == 0`, `rootBest_`; periodically calls
+`checkStop`.
 
 **Warnings:** draw detection is skipped at the root (`ply > 0` guard) so a move is
 always returned. Uses `isRepetition(1)` (twofold) as the in-search draw rule — the
@@ -226,7 +249,8 @@ when aborting (`timeUp_`).
 - **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`
   seeds `best` as a lower bound — return immediately on `best >= beta`, else raise `alpha`. When
   **in check**, standing pat is forbidden: `best` starts at `-∞` and every legal
-  evasion is searched (`orderMoves`), so a genuine checkmate scores `mated_in(ply)`.
+  evasion is searched (`orderMoves`, ordered with the shared `history_` killers/history
+  but no TT/countermove context), so a genuine checkmate scores `mated_in(ply)`.
 - **Move set**: not in check → captures / capture-promotions only
   (`legalmoves<CAPTURE>`), [`orderCaptures`](movepick.hpp.md#ordercaptures) by MVV-LVA.
 - **SEE pruning**: a capture with [`seeGE`](see.hpp.md#seege)`(m, 0) == false` (a losing

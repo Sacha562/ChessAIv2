@@ -6,6 +6,12 @@ mixes **structural invariants** that must hold for any position with direct
 move's category from the same `isCapture` / [`seeGE`](../src/see.hpp.md#seege) signals
 the scorer uses, then checking the ordered list never steps back up a category.
 
+Since Phase 1b step 1, [`orderMoves`](../src/movepick.hpp.md#ordermoves) takes a
+[`History`](../src/history.hpp.md), a `ply`, and a `prevMove`. These tests pass an
+**empty** `History` (via a local `order()` helper) so they isolate the capture/quiet
+**bucket structure** from the quiet signals — the killer / countermove / history
+interactions live in [test_history.cpp.md](test_history.cpp.md).
+
 ## Test Code
 
 - **Test Code:** [test_movepick.cpp](test_movepick.cpp)
