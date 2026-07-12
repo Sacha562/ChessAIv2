@@ -95,21 +95,23 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
-| `lmrBase` | `int` | `78` | LMR reduction offset ×100 (`LmrBase`); `0.78` in the curve. |
-| `lmrDivisor` | `int` | `240` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `2.40` in the curve (kept ≥ 1). |
-| `nmpBase` | `int` | `3` | Null-move base reduction `R` (`NmpBase`). |
-| `nmpEvalDiv` | `int` | `200` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
-| `rfpMargin` | `Value` | `80` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
-| `futMargin` | `Value` | `90` | Futility margin per remaining ply, cp (`FutMargin`). |
-| `futBase` | `Value` | `90` | Futility base margin, cp (`FutBase`). |
-| `lmpBase` | `int` | `3` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+| `lmrBase` | `int` | `70` | LMR reduction offset ×100 (`LmrBase`); `0.70` in the curve. |
+| `lmrDivisor` | `int` | `208` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `2.08` in the curve (kept ≥ 1). |
+| `nmpBase` | `int` | `1` | Null-move base reduction `R` (`NmpBase`). |
+| `nmpEvalDiv` | `int` | `177` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `rfpMargin` | `Value` | `68` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
+| `futMargin` | `Value` | `105` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `94` | Futility base margin, cp (`FutBase`). |
+| `lmpBase` | `int` | `1` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
 
-The **forward-pruning margins** (`lmrBase` … `lmpBase`) are first-cut, never-tuned values
-exposed for **SPSA** self-play tuning (they need to be UCI options, not `constexpr`, so a
-tuner can perturb them without a rebuild). Only the margins are tunable; the structural
-gates (min depths, `LMR_MIN_MOVES`, etc.) stay `constexpr`. `lmrBase` / `lmrDivisor` are
-integer-scaled ×100 because the tuner works in integers; they are divided when the LMR
-table is (re)built ([`buildReductions`](#searcherbuildreductions)).
+The **forward-pruning margins** (`lmrBase` … `lmpBase`) are exposed as UCI options (not
+`constexpr`) so **SPSA** self-play can tune them without a rebuild. The defaults above are
+**SPSA-tuned** (OpenBench, 96k games @ STC): the tuned set beat the first-cut values by
+**+82 ± 20 Elo** (SPRT accepted). `NmpBase` and `LmpBase` sit at their tuning floor of 1.
+Only the margins are tunable; the structural gates (min depths, `LMR_MIN_MOVES`, etc.) stay
+`constexpr`. `lmrBase` / `lmrDivisor` are integer-scaled ×100 because the tuner works in
+integers; they are divided when the LMR table is (re)built
+([`buildReductions`](#searcherbuildreductions)).
 
 The `use*` toggles exist to **A/B-isolate** each Phase 1b signal's Elo (flip one on/off,
 run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via

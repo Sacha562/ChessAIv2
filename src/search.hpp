@@ -70,14 +70,14 @@ struct Tunables {
     // divisor are stored x100 (integer knobs for the tuner) and divided when the LMR
     // reduction table is built. Structural gates (min depths, move counts) stay
     // constexpr in search.cpp.
-    int   lmrBase    = 78;  // LMR reduction offset, x100 (0.78)
-    int   lmrDivisor = 240; // LMR ln*ln divisor,  x100 (2.40); must stay >= 1
-    int   nmpBase    = 3;   // null-move base reduction R
-    int   nmpEvalDiv = 200; // null-move eval-margin divisor (cp of eval over beta per +1 R)
-    Value rfpMargin  = 80;  // reverse-futility margin per remaining ply (cp)
-    Value futMargin  = 90;  // futility margin per remaining ply (cp)
-    Value futBase    = 90;  // futility base margin (cp)
-    int   lmpBase    = 3;   // late-move-pruning quiet-count base (count = base + depth^2)
+    int   lmrBase    = 70;  // LMR reduction offset, x100 (0.70)
+    int   lmrDivisor = 208; // LMR ln*ln divisor,  x100 (2.08); must stay >= 1
+    int   nmpBase    = 1;   // null-move base reduction R
+    int   nmpEvalDiv = 177; // null-move eval-margin divisor (cp of eval over beta per +1 R)
+    Value rfpMargin  = 68;  // reverse-futility margin per remaining ply (cp)
+    Value futMargin  = 105; // futility margin per remaining ply (cp)
+    Value futBase    = 94;  // futility base margin (cp)
+    int   lmpBase    = 1;   // late-move-pruning quiet-count base (count = base + depth^2)
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
