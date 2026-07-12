@@ -52,7 +52,11 @@ struct Tunables {
     bool useKillers     = true;
     bool useHistory     = true;
     bool useCountermove = true;
-    bool useIir         = true;
+    bool useContHist    = false; // continuation history (Phase 1c): A/B-neutral vs 0.1b at the
+                                 // current material-only eval (-19 +/- 24 Elo, 436g) -- default
+                                 // OFF until re-tested once the HCE eval lands (its value scales
+                                 // with eval sophistication). Kept wired + tested via UseContHist.
+    bool useIir = true;
 
     // Phase 1b pruning / reduction / extension toggles (each individually ablatable).
     bool useNmp        = true; // null-move pruning
@@ -61,6 +65,7 @@ struct Tunables {
     bool useLmp        = true; // late-move (move-count) pruning
     bool useLmr        = true; // late move reductions
     bool useCheckExt   = true; // check extensions
+    bool useSingular   = true; // singular extensions (Phase 1c)
     bool useAspiration = true; // aspiration windows at the root
 
     // Aspiration: initial half-window (cp) around the previous iteration's score.
@@ -78,6 +83,13 @@ struct Tunables {
     Value futMargin  = 105; // futility margin per remaining ply (cp)
     Value futBase    = 94;  // futility base margin (cp)
     int   lmpBase    = 1;   // late-move-pruning quiet-count base (count = base + depth^2)
+
+    // Singular-extension knobs (Phase 1c). The TT move is verified singular by a
+    // reduced-depth search (excluding it) against a lowered beta; if every alternative
+    // fails below that beta, the TT move is extended.
+    int singularMinDepth     = 8;  // only attempt at/above this depth (TT must be this deep)
+    int singularMargin       = 2;  // singularBeta = ttValue - singularMargin * depth (cp/ply)
+    int singularDoubleMargin = 20; // extra ply when the verification fails this far under (cp)
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
@@ -99,7 +111,8 @@ public:
     uint64_t nodes() const { return nodes_; }
 
 private:
-    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove);
+    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
+                   Move excluded = Move(Move::NO_MOVE));
     Value   aspirationSearch(Board& board, int depth, Value prevScore);
     Value   qsearch(Board& board, Value alpha, Value beta, int ply);
     void    setupTiming(const Limits& limits, const Board& board);
@@ -120,6 +133,12 @@ private:
     History             history_;                // quiet-move ordering heuristics (per search)
     Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
     uint8_t reductions_[LMR_DIM][LMR_DIM]{};     // LMR reduction table (see buildReductions)
+
+    // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
+    // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds
+    // continuation history the moves 1 and 2 plies back. Written just before recursing.
+    int contPiece_[MAX_PLY]{};
+    int contTo_[MAX_PLY]{};
 
     std::chrono::steady_clock::time_point start_{};
     int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)

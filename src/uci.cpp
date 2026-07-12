@@ -157,6 +157,8 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.useHistory = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseCountermove" && !value.empty()) {
             tunables_.useCountermove = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseContHist" && !value.empty()) {
+            tunables_.useContHist = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseIIR" && !value.empty()) {
             tunables_.useIir = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseNMP" && !value.empty()) {
@@ -171,6 +173,8 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.useLmr = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseCheckExt" && !value.empty()) {
             tunables_.useCheckExt = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseSingular" && !value.empty()) {
+            tunables_.useSingular = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseAspiration" && !value.empty()) {
             tunables_.useAspiration = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "AspirationDelta" && !value.empty()) {
@@ -193,6 +197,14 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.futBase = std::clamp(std::stoi(value), 0, 400);
         } else if (name == "LmpBase" && !value.empty()) {
             tunables_.lmpBase = std::clamp(std::stoi(value), 1, 12);
+        }
+        // Phase 1c singular-extension knobs (SPSA-tunable).
+        else if (name == "SingularMinDepth" && !value.empty()) {
+            tunables_.singularMinDepth = std::clamp(std::stoi(value), 4, 12);
+        } else if (name == "SingularMargin" && !value.empty()) {
+            tunables_.singularMargin = std::clamp(std::stoi(value), 1, 8);
+        } else if (name == "SingularDoubleMargin" && !value.empty()) {
+            tunables_.singularDoubleMargin = std::clamp(std::stoi(value), 0, 200);
         }
     } catch (...) { /* ignore malformed values */
     }
@@ -219,6 +231,7 @@ void Engine::loop() {
                       << "option name UseKillers type spin default 1 min 0 max 1\n"
                       << "option name UseHistory type spin default 1 min 0 max 1\n"
                       << "option name UseCountermove type spin default 1 min 0 max 1\n"
+                      << "option name UseContHist type spin default 0 min 0 max 1\n"
                       << "option name UseIIR type spin default 1 min 0 max 1\n"
                       << "option name UseNMP type spin default 1 min 0 max 1\n"
                       << "option name UseRFP type spin default 1 min 0 max 1\n"
@@ -226,6 +239,7 @@ void Engine::loop() {
                       << "option name UseLMP type spin default 1 min 0 max 1\n"
                       << "option name UseLMR type spin default 1 min 0 max 1\n"
                       << "option name UseCheckExt type spin default 1 min 0 max 1\n"
+                      << "option name UseSingular type spin default 1 min 0 max 1\n"
                       << "option name UseAspiration type spin default 1 min 0 max 1\n"
                       << "option name AspirationDelta type spin default 15 min 1 max 500\n"
                       << "option name LmrBase type spin default 70 min 0 max 200\n"
@@ -236,6 +250,9 @@ void Engine::loop() {
                       << "option name FutMargin type spin default 105 min 10 max 300\n"
                       << "option name FutBase type spin default 94 min 0 max 400\n"
                       << "option name LmpBase type spin default 1 min 1 max 12\n"
+                      << "option name SingularMinDepth type spin default 8 min 4 max 12\n"
+                      << "option name SingularMargin type spin default 2 min 1 max 8\n"
+                      << "option name SingularDoubleMargin type spin default 20 min 0 max 200\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

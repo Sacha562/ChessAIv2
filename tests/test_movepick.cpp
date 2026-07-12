@@ -21,7 +21,7 @@ const History NO_HIST;
 const Move    NO_MOVE = Move(Move::NO_MOVE);
 
 void order(const Board& b, Movelist& ml, Move ttMove) {
-    orderMoves(b, ml, ttMove, NO_HIST, /*ply=*/0, /*prevMove=*/NO_MOVE);
+    orderMoves(b, ml, ttMove, NO_HIST, /*ply=*/0, /*prevMove=*/NO_MOVE, ContHistContext{});
 }
 
 // 2 = winning/equal capture (SEE >= 0), 1 = quiet, 0 = losing capture (SEE < 0).

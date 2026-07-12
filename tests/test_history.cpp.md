@@ -4,11 +4,14 @@ Unit tests for the [quiet-move ordering heuristics](../src/history.hpp.md)
 (`src/history.*`). Strategy: drive a `History` through its public update API
 ([`updateQuietCutoff`](../src/history.hpp.md#historyupdatequietcutoff)) and assert the
 observable contract — killer LIFO, history bonus/malus signs, the saturating gravity
-bound, and countermove round-trips — then two end-to-end checks that these signals
-actually move a quiet's rank in [`orderMoves`](../src/movepick.hpp.md#ordermoves).
+bound, countermove round-trips, and **continuation-history** reward/malus + context
+keying — then end-to-end checks that these signals actually move a quiet's rank in
+[`orderMoves`](../src/movepick.hpp.md#ordermoves).
 
-A local `cutoff()` helper records a quiet fail-high at ply 0 for the side to move, and
-`rankOf()` finds a move's position in an ordered list.
+A local `cutoff()` helper records a quiet fail-high at ply 0 for the side to move
+(taking an optional [`ContHistContext`](../src/history.hpp.md#struct-conthistcontext)),
+`rankOf()` finds a move's position in an ordered list, `pieceIndex()` returns a move's
+colour+type index, and `ctx1()` builds a one-ply continuation context from raw indices.
 
 ## Test Code
 
@@ -67,3 +70,25 @@ that killer at index 0.
 
 A quiet given negative history (searched-then-failed before a cutoff) is ordered after
 an untouched, zero-history quiet.
+
+### `continuation history rewards the cutoff and penalises the quiets tried first`
+
+Under a fixed one-ply context, a cutoff by `cut` with `fail` searched (and failed) first
+leaves `continuationScore(cut) > 0` and `continuationScore(fail) < 0` — the same
+bonus/malus signs as butterfly history, but keyed on the recent-move context.
+
+### `continuation history is keyed by the recent-move context`
+
+A cutoff recorded under one context is invisible from a *different* context (same move,
+different prior move → score `0`) and from an empty context (no prior move → `0`).
+
+### `continuation history is silent when disabled`
+
+With `UseContHist` off ([`setEnabled`](../src/history.hpp.md#historysetenabled)),
+`continuationScore` returns `0` even after a cutoff that would otherwise reward it.
+
+### `a continuation-history quiet floats above a neutral quiet`
+
+With the other quiet signals disabled so only continuation history can move a rank, a
+quiet rewarded under the node's context is ordered ahead of an untouched quiet by
+[`orderMoves`](../src/movepick.hpp.md#ordermoves).

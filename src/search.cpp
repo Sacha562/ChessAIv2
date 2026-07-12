@@ -48,6 +48,11 @@ constexpr int LMR_MIN_MOVES = 2; // start reducing at the 3rd move
 // Aspiration windows: only worthwhile once a few iterations have stabilised.
 constexpr int ASPIRATION_MIN_DEPTH = 5;
 
+// Singular extensions: the TT entry must be nearly as deep as this node for its score
+// to be a trustworthy singular-verification target (tt.depth >= depth - this). The
+// verification runs at (depth - 1) / 2. Structural gate; the margins are tunable.
+constexpr int SINGULAR_TT_DEPTH_MARGIN = 3;
+
 // A TT entry may only cut when the fifty-move clock is well below the 100-halfmove
 // draw; otherwise a stored score can't be trusted (it may ignore the looming draw).
 constexpr int TT_CUTOFF_MAX_HALFMOVE = 90;
@@ -157,8 +162,11 @@ int Searcher::lmrReduction(int depth, int moveCount) const {
     return reductions_[std::min(depth, LMR_DIM - 1)][std::min(moveCount, LMR_DIM - 1)];
 }
 
-Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove) {
+Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
+                       Move excluded) {
     if (timeUp_) return VALUE_ZERO;
+
+    const bool inSingular = excluded != Move(Move::NO_MOVE);
 
     ++nodes_;
     if ((nodes_ & TIME_CHECK_MASK) == 0) checkStop();
@@ -185,7 +193,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     const TTProbe tt     = tt_.probe(key);
     if (tt.hit) {
         ttMove = tt.move;
-        if (!pvNode && tt.depth >= depth && board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE) {
+        // Never take the TT cutoff inside a singular-verification search: it would just
+        // return the excluded move's own score instead of searching the alternatives.
+        if (!pvNode && !inSingular && tt.depth >= depth &&
+            board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE) {
             const Value ttv = valueFromTT(tt.value, ply);
             if (tt.bound == BOUND_EXACT || (tt.bound == BOUND_LOWER && ttv >= beta) ||
                 (tt.bound == BOUND_UPPER && ttv <= alpha))
@@ -223,6 +234,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             hasNonPawnMaterial(board, board.sideToMove())) {
             const int R = tp_.nmpBase + depth / NMP_DIV +
                           std::min<int>((eval - beta) / tp_.nmpEvalDiv, NMP_EVAL_MAX);
+            contPiece_[ply] = -1; // a null move leaves the child no continuation context
             board.makeNullMove();
             const Value nullScore =
                 -search(board, depth - 1 - R, -beta, -beta + 1, ply + 1, Move(Move::NO_MOVE));
@@ -241,9 +253,22 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 
     if (moves.empty()) return inCheck ? mated_in(ply) : VALUE_DRAW;
 
+    // Resolve the continuation-history context — the (piece, to) of the moves 1 and 2
+    // plies back, recorded in the search stack as those moves were made. Absent at the
+    // root, after a null move (-1), or before enough plies exist.
+    ContHistContext contCtx;
+    if (ply >= 1 && contPiece_[ply - 1] >= 0) {
+        contCtx.piece1 = contPiece_[ply - 1];
+        contCtx.to1    = contTo_[ply - 1];
+    }
+    if (ply >= 2 && contPiece_[ply - 2] >= 0) {
+        contCtx.piece2 = contPiece_[ply - 2];
+        contCtx.to2    = contTo_[ply - 2];
+    }
+
     // Order: TT move, then winning/equal captures (SEE >= 0), killers, countermove,
-    // history-scored quiets, then losing captures. The single biggest lever on speed.
-    orderMoves(board, moves, ttMove, history_, ply, prevMove);
+    // history + continuation-history quiets, then losing captures. The biggest speed lever.
+    orderMoves(board, moves, ttMove, history_, ply, prevMove, contCtx);
 
     Value best      = -VALUE_INFINITE;
     Move  bestMove  = Move(Move::NO_MOVE);
@@ -251,8 +276,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     Move  quietsTried[constants::MAX_MOVES];
     int   nQuietsTried = 0;
     for (const auto& m : moves) {
+        if (m == excluded) continue; // singular verification: search everything but the TT move
         ++moveCount;
-        const bool isQuiet = !board.isCapture(m);
+        const bool isQuiet    = !board.isCapture(m);
+        const int  movedPiece = static_cast<int>(board.at(m.from())); // colour+type, pre-move
 
         // Move-loop pruning of quiets: off the PV, out of check, once a real move has
         // been searched, and not while being mated (we still need an escape).
@@ -268,14 +295,41 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
                 continue;
         }
 
+        // Singular extension: decided before the move is made, for the TT move only. If
+        // the TT move looks forced — a deep-enough lower-bound TT score — verify it with
+        // a reduced-depth search that excludes it and searches against a lowered beta. If
+        // every alternative fails below that beta the TT move is singular and searched
+        // deeper (doubly so when they fail far below); if it is not singular yet the TT
+        // score already beats beta, reduce it instead (a multi-cut-style negative
+        // extension). Never inside a verification search, and never on a mate score.
+        int singularExt = 0;
+        if (tp_.useSingular && !inSingular && m == ttMove && ply > 0 && tt.hit &&
+            depth >= tp_.singularMinDepth && tt.depth >= depth - SINGULAR_TT_DEPTH_MARGIN &&
+            (tt.bound == BOUND_LOWER || tt.bound == BOUND_EXACT) && ply + 1 < MAX_PLY - 1) {
+            const Value ttValue = valueFromTT(tt.value, ply);
+            if (!is_mate(ttValue)) {
+                const Value sBeta = std::max<Value>(ttValue - tp_.singularMargin * depth,
+                                                    VALUE_MATED_IN_MAX_PLY + 1);
+                const Value sScore =
+                    search(board, (depth - 1) / 2, sBeta - 1, sBeta, ply, prevMove, ttMove);
+                if (timeUp_) return VALUE_ZERO;
+                if (sScore < sBeta)
+                    singularExt = (!pvNode && sScore < sBeta - tp_.singularDoubleMargin) ? 2 : 1;
+                else if (ttValue >= beta)
+                    singularExt = -1;
+            }
+        }
+
         tt_.prefetch(board.zobristAfter(m));
+        contPiece_[ply] = movedPiece; // search-stack record for the child's continuation history
+        contTo_[ply]    = m.to().index();
         board.makeMove(m);
         const bool givesCheck = board.inCheck();
 
-        // Check extension: search a checking reply one ply deeper. Bounded so ply can
-        // never overrun the per-ply tables.
-        const int ext      = (tp_.useCheckExt && givesCheck && ply + 1 < MAX_PLY - 1) ? 1 : 0;
-        const int newDepth = depth - 1 + ext;
+        // Extensions: the singular extension decided above plus a check extension for a
+        // checking reply. Bounded so ply can never overrun the per-ply tables.
+        const int checkExt = (tp_.useCheckExt && givesCheck && ply + 1 < MAX_PLY - 1) ? 1 : 0;
+        const int newDepth = depth - 1 + singularExt + checkExt;
 
         // Late move reductions: search late quiets shallower, less so on the PV or when
         // the eval is improving. A reduced search that beats alpha is re-searched.
@@ -314,17 +368,24 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         if (score > alpha) alpha = score;
         if (alpha >= beta) {
             // Fail-high cutoff. A quiet cutoff teaches move ordering: reward this move,
-            // penalise the quiets tried before it, and record killer / countermove.
+            // penalise the quiets tried before it, and record killer / countermove /
+            // continuation history.
             if (isQuiet)
                 history_.updateQuietCutoff(board, board.sideToMove(), ply, depth, prevMove, m,
-                                           quietsTried, nQuietsTried);
+                                           quietsTried, nQuietsTried, contCtx);
             break;
         }
         if (isQuiet) quietsTried[nQuietsTried++] = m;
     }
 
-    const Bound bound = best >= beta ? BOUND_LOWER : best > alphaOrig ? BOUND_EXACT : BOUND_UPPER;
-    tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : eval, bestMove, bound);
+    // Don't store a singular-verification result: it is the value of a restricted move
+    // set (the TT move excluded), not of this position, so it must not pollute the TT.
+    if (!inSingular) {
+        const Bound bound = best >= beta       ? BOUND_LOWER
+                            : best > alphaOrig ? BOUND_EXACT
+                                               : BOUND_UPPER;
+        tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : eval, bestMove, bound);
+    }
 
     return best;
 }
@@ -388,7 +449,8 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     if (inCheck) {
         movegen::legalmoves(moves, board);
         if (moves.empty()) return mated_in(ply); // checkmate
-        orderMoves(board, moves, Move(Move::NO_MOVE), history_, ply, Move(Move::NO_MOVE));
+        orderMoves(board, moves, Move(Move::NO_MOVE), history_, ply, Move(Move::NO_MOVE),
+                   ContHistContext{});
     } else {
         // Not in check: only captures. An empty list here means "no captures", not
         // necessarily "no moves" — so a stalemate is scored as its (quiet) stand-pat
@@ -436,7 +498,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     nodes_  = 0;
     timeUp_ = false;
     tt_.newSearch();
-    history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove);
+    history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove, tp_.useContHist);
     buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);

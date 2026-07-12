@@ -7,10 +7,12 @@ move's category from the same `isCapture` / [`seeGE`](../src/see.hpp.md#seege) s
 the scorer uses, then checking the ordered list never steps back up a category.
 
 Since Phase 1b step 1, [`orderMoves`](../src/movepick.hpp.md#ordermoves) takes a
-[`History`](../src/history.hpp.md), a `ply`, and a `prevMove`. These tests pass an
-**empty** `History` (via a local `order()` helper) so they isolate the capture/quiet
-**bucket structure** from the quiet signals — the killer / countermove / history
-interactions live in [test_history.cpp.md](test_history.cpp.md).
+[`History`](../src/history.hpp.md), a `ply`, a `prevMove`, and (since Phase 1c) a
+[`ContHistContext`](../src/history.hpp.md#struct-conthistcontext). These tests pass an
+**empty** `History` and an **empty** context (via a local `order()` helper) so they
+isolate the capture/quiet **bucket structure** from the quiet signals — the killer /
+countermove / history / continuation-history interactions live in
+[test_history.cpp.md](test_history.cpp.md).
 
 ## Test Code
 
