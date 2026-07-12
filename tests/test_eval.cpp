@@ -86,3 +86,13 @@ TEST_CASE("PSQT prefers a centralised knight to a cornered one") {
     const Value corner  = eval("4k3/8/8/8/8/8/8/N3K3 w - - 0 1");
     CHECK(central > corner);
 }
+
+TEST_CASE("mobility rewards a bishop with an open diagonal") {
+    // Same material (White up a bishop + two pawns). The bishop sits on g2 in both,
+    // but in the second its own pawns on f3/e4 wall in the long diagonal, cutting its
+    // mobility from ~9 safe squares to ~3. The eval must prefer the freer bishop — a
+    // sanity check that the mobility term is wired and signed for the freer side.
+    const Value open    = eval("4k3/8/8/8/8/8/1P2P1B1/4K3 w - - 0 1");
+    const Value blocked = eval("4k3/8/8/8/4P3/5P2/6B1/4K3 w - - 0 1");
+    CHECK(open > blocked);
+}

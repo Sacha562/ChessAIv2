@@ -6,9 +6,9 @@ by [search](search.hpp.md) at leaf nodes. This is a search **hot path** — `eva
 is called once per quiescence leaf, so it must stay cheap.
 
 Phase 1c evaluation is a **tapered piece-square-table (PSQT) sum** with material
-folded in (a "PeSTO"-style eval), plus a caller-supplied tempo bonus. Pawn
-structure, mobility, piece terms, and king safety arrive later in Phase 1c (see
-[PLAN.md](../PLAN.md) §17); NNUE in Phase 2. All weights are **Texel-tunable** —
+folded in (a "PeSTO"-style eval), plus a **mobility** term and a caller-supplied
+tempo bonus. Pawn structure, piece terms, and king safety arrive later in Phase 1c
+(see [PLAN.md](../PLAN.md) §17); NNUE in Phase 2. All weights are **Texel-tunable** —
 they live in a plain data block (`EvalParams`) rather than hard-coded constants, so
 the tuner can fit them to self-play results and write the optimized tables back.
 
@@ -22,11 +22,13 @@ the tuner can fit them to self-play results and write the optimized tables back.
 - Public API declared in namespace `engine`: the `EvalParams` struct, the
   `DEFAULT_EVAL_PARAMS` table, and the two `evaluate` overloads.
 - The PeSTO seed tables (`MG_VALUE`/`EG_VALUE` material, the twelve `MG_*`/`EG_*`
-  positional deltas, `MG_DELTA`/`EG_DELTA`), the phase weights (`PHASE_WEIGHT`,
-  `PHASE_MAX`), the `PIECE_TYPES` index map, and the `buildDefaultParams` folder all
-  live in an anonymous namespace in `eval.cpp` — internal linkage, **not** public
-  API. The tempo bonus is not a constant here: it is passed in as the `tempo`
-  argument (a self-play knob held by [`Tunables`](search.hpp.md#struct-tunables)).
+  positional deltas, `MG_DELTA`/`EG_DELTA`), the mobility seed ramp
+  (`MOB_CENTER`/`MOB_MG_SLOPE`/`MOB_EG_SLOPE`/`MOB_MAX`), the phase weights
+  (`PHASE_WEIGHT`, `PHASE_MAX`), the `PIECE_TYPES` index map, the `buildDefaultParams`
+  folder, and the `addMobility` helper all live in an anonymous namespace in
+  `eval.cpp` — internal linkage, **not** public API. The tempo bonus is not a constant
+  here: it is passed in as the `tempo` argument (a self-play knob held by
+  [`Tunables`](search.hpp.md#struct-tunables)).
 
 ## Types
 
@@ -39,6 +41,8 @@ folded in.
 |--------|------|-------------|
 | `mg` | `std::array<std::array<int16_t, 64>, 6>` | Midgame value of a `(piece type, square)`, in centipawns. |
 | `eg` | `std::array<std::array<int16_t, 64>, 6>` | Endgame value of the same. |
+| `mobMg` | `std::array<std::array<int16_t, 28>, 4>` | Midgame mobility bonus indexed by `(piece, safe-square count)`; piece 0=knight, 1=bishop, 2=rook, 3=queen. |
+| `mobEg` | `std::array<std::array<int16_t, 28>, 4>` | Endgame mobility bonus, same indexing. |
 
 - **Piece index (0..5):** `P, N, B, R, Q, K`, matching `PIECE_TYPES` in `eval.cpp`.
 - **Square orientation:** tables are stored in **White's a8-first view** (index 0 =
@@ -90,13 +94,22 @@ sums: `(mg * phase + eg * (PHASE_MAX - phase)) / PHASE_MAX` (24 = pure opening, 
 bare endgame). This removes eval discontinuities and lets pawns and the king rise in
 value toward the endgame.
 
+**Mobility:** each knight/bishop/rook/queen scores `mobMg`/`mobEg` indexed by how
+many of its attacked squares fall in the side's **mobility area** — squares that are
+neither occupied by a friendly piece nor attacked by an enemy pawn (sliders are
+blocked by the full occupancy). The two colours' mobility is accumulated into the
+same `mg`/`eg` sums (White adds, Black subtracts) before the taper, so it inherits
+the phase blend. This is the second-biggest HCE term after PSQT and reuses the
+library's `attacks::` tables.
+
 **Side Effects:** none (pure function of `board` and `params`).
 
-**Performance:** per-leaf hot path. Recomputed from scratch each call — one bitboard
-pop-loop per piece type (~O(pieces on the board) table gathers) plus the phase
-blend. An **incremental** PSQT sum on make/unmake (the discipline NNUE's accumulator
-will reuse in Phase 2) is a later optimization; from-scratch is correct and simple
-now.
+**Performance:** per-leaf hot path. Recomputed from scratch each call — a bitboard
+pop-loop per piece type for the PSQT sum, plus, for the mobility term, a sliding
+`attacks::` lookup per knight/bishop/rook/queen (blocked by occupancy) and a popcount
+against the mobility area. Mobility roughly doubles the eval's work versus PSQT-only.
+An **incremental** PSQT sum on make/unmake (the discipline NNUE's accumulator will
+reuse in Phase 2) is a later optimization; from-scratch is correct and simple now.
 
 **Warnings:**
 - The tempo bonus is applied **after** the perspective flip, so it always favors the

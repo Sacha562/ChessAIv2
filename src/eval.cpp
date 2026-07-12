@@ -81,13 +81,28 @@ constexpr std::array<std::array<int16_t, 64>, 6> MG_DELTA = {MG_PAWN, MG_KNIGHT,
 constexpr std::array<std::array<int16_t, 64>, 6> EG_DELTA = {EG_PAWN, EG_KNIGHT, EG_BISHOP,
                                                              EG_ROOK, EG_QUEEN,  EG_KING};
 
-// Fold material into the positional deltas to form the combined default tables.
+// Mobility seed: a linear ramp per piece (knight, bishop, rook, queen), centered so
+// an average move count is roughly neutral. Deliberately simple starting values —
+// Texel tuning refits them.
+constexpr std::array<int, 4> MOB_CENTER   = {4, 6, 7, 13};
+constexpr std::array<int, 4> MOB_MG_SLOPE = {4, 3, 2, 1};
+constexpr std::array<int, 4> MOB_EG_SLOPE = {4, 4, 4, 2};
+constexpr int                MOB_MAX      = 28; // queen's worst case; higher slots unused
+
+// Fold material into the positional deltas, and seed the mobility ramp, to form the
+// combined default tables.
 constexpr EvalParams buildDefaultParams() {
     EvalParams p{};
     for (int pt = 0; pt < 6; ++pt) {
         for (int sq = 0; sq < 64; ++sq) {
             p.mg[pt][sq] = static_cast<int16_t>(MG_VALUE[pt] + MG_DELTA[pt][sq]);
             p.eg[pt][sq] = static_cast<int16_t>(EG_VALUE[pt] + EG_DELTA[pt][sq]);
+        }
+    }
+    for (int pt = 0; pt < 4; ++pt) {
+        for (int m = 0; m < MOB_MAX; ++m) {
+            p.mobMg[pt][m] = static_cast<int16_t>((m - MOB_CENTER[pt]) * MOB_MG_SLOPE[pt]);
+            p.mobEg[pt][m] = static_cast<int16_t>((m - MOB_CENTER[pt]) * MOB_EG_SLOPE[pt]);
         }
     }
     return p;
@@ -101,6 +116,41 @@ constexpr std::array<PieceType, 6> PIECE_TYPES = {PieceType::PAWN,   PieceType::
 // Tapered-eval phase weight per piece (both sides summed); non-pawn material only.
 constexpr std::array<int, 6> PHASE_WEIGHT = {0, 1, 1, 2, 4, 0};
 constexpr int                PHASE_MAX    = 24; // 2 * (2*1 + 2*1 + 2*2 + 1*4)
+
+// Mobility-table indices (knight, bishop, rook, queen).
+constexpr int MOB_KNIGHT = 0, MOB_BISHOP = 1, MOB_ROOK = 2, MOB_QUEEN = 3;
+
+// Accumulate one colour's mobility into (mg, eg), scaled by `sign` (+1 White,
+// -1 Black). Mobility is the count of a piece's attacks landing in `mobArea` (safe
+// squares: not friendly-occupied, not attacked by an enemy pawn); sliders are blocked
+// by `occ`.
+void addMobility(const Board& board, const EvalParams& p, Color c, Bitboard mobArea, Bitboard occ,
+                 int sign, int& mg, int& eg) {
+    Bitboard knights = board.pieces(PieceType::KNIGHT, c);
+    while (knights) {
+        const int m = (attacks::knight(Square(knights.pop())) & mobArea).count();
+        mg += sign * p.mobMg[MOB_KNIGHT][m];
+        eg += sign * p.mobEg[MOB_KNIGHT][m];
+    }
+    Bitboard bishops = board.pieces(PieceType::BISHOP, c);
+    while (bishops) {
+        const int m = (attacks::bishop(Square(bishops.pop()), occ) & mobArea).count();
+        mg += sign * p.mobMg[MOB_BISHOP][m];
+        eg += sign * p.mobEg[MOB_BISHOP][m];
+    }
+    Bitboard rooks = board.pieces(PieceType::ROOK, c);
+    while (rooks) {
+        const int m = (attacks::rook(Square(rooks.pop()), occ) & mobArea).count();
+        mg += sign * p.mobMg[MOB_ROOK][m];
+        eg += sign * p.mobEg[MOB_ROOK][m];
+    }
+    Bitboard queens = board.pieces(PieceType::QUEEN, c);
+    while (queens) {
+        const int m = (attacks::queen(Square(queens.pop()), occ) & mobArea).count();
+        mg += sign * p.mobMg[MOB_QUEEN][m];
+        eg += sign * p.mobEg[MOB_QUEEN][m];
+    }
+}
 
 } // namespace
 
@@ -127,6 +177,19 @@ Value evaluate(const Board& board, const EvalParams& params, Value tempo) {
             eg -= params.eg[pt][sq];
         }
     }
+
+    // Mobility: each side scored over squares that are neither friendly-occupied nor
+    // attacked by an enemy pawn.
+    using CU           = Color::underlying;
+    const Bitboard occ = board.occ();
+    const Bitboard wp  = board.pieces(PieceType::PAWN, Color::WHITE);
+    const Bitboard bp  = board.pieces(PieceType::PAWN, Color::BLACK);
+    const Bitboard wPawnAt =
+        attacks::pawnLeftAttacks<CU::WHITE>(wp) | attacks::pawnRightAttacks<CU::WHITE>(wp);
+    const Bitboard bPawnAt =
+        attacks::pawnLeftAttacks<CU::BLACK>(bp) | attacks::pawnRightAttacks<CU::BLACK>(bp);
+    addMobility(board, params, Color::WHITE, ~board.us(Color::WHITE) & ~bPawnAt, occ, 1, mg, eg);
+    addMobility(board, params, Color::BLACK, ~board.us(Color::BLACK) & ~wPawnAt, occ, -1, mg, eg);
 
     // Early promotions can push the phase above the cap; clamp so the blend stays in
     // [eg, mg].

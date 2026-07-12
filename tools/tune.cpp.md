@@ -85,6 +85,11 @@ before committing — no eval change ships on the tuner's word alone.
 - **Data quality is everything.** The result label must reflect *this eval's*
   judgment, so tune on the engine's own self-play, not a GM/human database (the
   positions and outcomes are off-distribution). See [PLAN.md](../PLAN.md) §18.
+- **Fits the PSQT tables (`EvalParams.mg`/`eg`) only.** As the eval grows new terms
+  (mobility `mobMg`/`mobEg`, and later pawn/king-safety weights), the tuner's feature
+  extraction and gradient must be generalized to cover them, or it will bend the PSQT
+  to compensate for terms it cannot see. Extending it to an all-term linear feature
+  trace is the planned next step before the first full joint tune.
 - The quiet filter is currently "not in check" (plus `extract`'s pre-filter). A
   stronger filter — keep only positions whose static eval equals their quiescence
   eval — is a possible refinement.

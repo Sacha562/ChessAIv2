@@ -56,3 +56,11 @@ the score.
 
 Same material (White up a knight, symmetric kings), knight on `d4` vs `a1`: the PSQT
 must score the centralised knight strictly higher.
+
+### `mobility rewards a bishop with an open diagonal`
+
+Same material (White up a bishop + two pawns), the bishop on `g2` in both positions
+but with its own pawns on `f3`/`e4` walling in the long diagonal in the second
+(mobility ~9 → ~3 safe squares). The eval must prefer the freer bishop — a check that
+the mobility term is wired and signed for the freer side. The colour-symmetry case
+above is the primary guard against a mobility sign/orientation bug.

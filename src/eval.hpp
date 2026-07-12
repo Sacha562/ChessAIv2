@@ -13,6 +13,14 @@ namespace engine {
 struct EvalParams {
     std::array<std::array<int16_t, 64>, 6> mg{};
     std::array<std::array<int16_t, 64>, 6> eg{};
+
+    // Mobility: midgame/endgame bonus indexed by the number of *safe* target squares
+    // a piece attacks (squares not occupied by a friendly piece and not attacked by an
+    // enemy pawn). One table per mobile piece, index 0=knight, 1=bishop, 2=rook,
+    // 3=queen; 28 slots covers the queen's maximum. Pawns and the king have no
+    // mobility term.
+    std::array<std::array<int16_t, 28>, 4> mobMg{};
+    std::array<std::array<int16_t, 28>, 4> mobEg{};
 };
 
 // PeSTO/Kaufman-seeded defaults, baked at namespace scope (see eval.cpp). The search
