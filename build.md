@@ -19,8 +19,12 @@ is nothing to build for it.
 
 ## Target
 
-Both builds produce a single executable, **`chessai`** (`chessai.exe` on Windows),
-from `src/*.cpp`, with `include/` and `src/` on the include path.
+Both builds produce the engine executable, **`chessai`** (`chessai.exe` on Windows),
+from `src/*.cpp`, with `include/` and `src/` on the include path. They also build two
+optional **offline tuning tools** from `tools/` — `tuner` and `extract` (see
+[Tuning tools](#tuning-tools)) — which are not part of the engine and are never linked
+into it. CMake builds all targets by default; the Makefile builds `chessai` by default
+and the tools via their named targets (`make tuner`, `make extract`).
 
 ## Compiler & Flags
 
@@ -100,6 +104,30 @@ node signatures are independent of it. `-Wno-\#warnings` silences a `<ciso646>`
 `#warning` doctest triggers under a C++20 libstdc++. Test docs live next to the code
 ([tests/test_tt.cpp.md](tests/test_tt.cpp.md)) per
 [documentation-style-guide.md §4.2](documentation-style-guide.md#42-test-files).
+
+## Tuning tools
+
+Two offline tools support the Phase 1c HCE eval-tuning loop
+([PLAN.md](PLAN.md) §18). Neither is on the search path, so they may use heap and
+I/O freely; both compile with the same C++20 / `-O3 -march=native` / PEXT flags as
+the engine.
+
+| Tool | Source | Links | Purpose |
+|------|--------|-------|---------|
+| `extract` | [tools/extract.cpp](tools/extract.cpp.md) | header-only (`chess.hpp`) | Replay a PGN and emit quiet, result-labeled positions (`FEN result` per line). |
+| `tuner` | [tools/tune.cpp](tools/tune.cpp.md) | `src/eval.cpp` | Texel-tune the eval's piece-square tables to that dataset; print paste-ready C++ tables. |
+
+```bash
+make extract && make tuner                       # or CMake: builds both by default
+./extract games/selfplay.pgn > dataset.txt       # PGN -> labeled FENs
+./tuner dataset.txt --epochs 300 > tuned.txt      # fit tables; new PSQTs on stdout
+```
+
+The tuning workflow — generate self-play games (fastchess), `extract` a dataset,
+`tuner` to fit the tables, paste the output into [src/eval.cpp](src/eval.hpp.md), then
+SPRT-confirm — is described in [tools/tune.cpp.md](tools/tune.cpp.md). The tools are
+excluded from the engine and test builds (the Makefile globs only `src/*.cpp`; the
+tools have their own `main`).
 
 ## Commit gate
 
