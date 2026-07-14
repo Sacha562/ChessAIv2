@@ -1,4 +1,8 @@
 #include "eval.hpp"
+
+#include <bit>
+#include <cstdint>
+
 #include "chess.hpp"
 
 using namespace chess;
@@ -14,9 +18,10 @@ namespace {
 constexpr std::array<int, 6> MG_VALUE = {82, 337, 365, 477, 1025, 0};
 constexpr std::array<int, 6> EG_VALUE = {94, 281, 297, 512, 936, 0};
 
-// Positional deltas, White's a8-first orientation (row 0 = rank 8). These are the
-// canonical PeSTO tables (Rofchade, via the Chess Programming Wiki); they are only
-// seeds — Texel tuning re-fits every entry.
+// Positional deltas, White's a8-first orientation (row 0 = rank 8). Canonical PeSTO
+// tables (Rofchade, via the Chess Programming Wiki). These are already well tuned, so
+// they are kept as-is; Texel tuning (tools/tune.cpp.md) targets the engine's own new
+// terms rather than re-fitting PeSTO on weaker self-play data.
 constexpr std::array<int16_t, 64> MG_PAWN = {
     0,   0,  0,   0,   0,   0,  0,  0,   98,  134, 61, 95,  68, 126, 34, -11,
     -6,  7,  26,  31,  65,  56, 25, -20, -14, 13,  6,  21,  23, 12,  17, -23,
@@ -82,15 +87,14 @@ constexpr std::array<std::array<int16_t, 64>, 6> EG_DELTA = {EG_PAWN, EG_KNIGHT,
                                                              EG_ROOK, EG_QUEEN,  EG_KING};
 
 // Mobility seed: a linear ramp per piece (knight, bishop, rook, queen), centered so
-// an average move count is roughly neutral. Deliberately simple starting values —
-// Texel tuning refits them.
+// an average move count is roughly neutral. SPRT-confirmed at +58 Elo, so kept as-is.
 constexpr std::array<int, 4> MOB_CENTER   = {4, 6, 7, 13};
 constexpr std::array<int, 4> MOB_MG_SLOPE = {4, 3, 2, 1};
 constexpr std::array<int, 4> MOB_EG_SLOPE = {4, 4, 4, 2};
 constexpr int                MOB_MAX      = 28; // queen's worst case; higher slots unused
 
-// Fold material into the positional deltas, and seed the mobility ramp, to form the
-// combined default tables.
+// Fold material into the positional deltas, seed the mobility ramp, and seed the
+// pawn-structure terms to form the combined default tables.
 constexpr EvalParams buildDefaultParams() {
     EvalParams p{};
     for (int pt = 0; pt < 6; ++pt) {
@@ -105,6 +109,25 @@ constexpr EvalParams buildDefaultParams() {
             p.mobEg[pt][m] = static_cast<int16_t>((m - MOB_CENTER[pt]) * MOB_EG_SLOPE[pt]);
         }
     }
+    // Pawn-structure seeds: penalties negative; the passed bonus grows with rank and
+    // is worth more in the endgame.
+    p.passedMg   = {0, 2, 5, 12, 25, 45, 75, 0};
+    p.passedEg   = {0, 5, 12, 25, 45, 75, 120, 0};
+    p.isolatedMg = -12;
+    p.isolatedEg = -18;
+    p.doubledMg  = -8;
+    p.doubledEg  = -22;
+    // Piece-term seeds (well-understood classical values).
+    p.bishopPairMg    = 22;
+    p.bishopPairEg    = 45;
+    p.rookOpenMg      = 30;
+    p.rookOpenEg      = 12;
+    p.rookSemiMg      = 12;
+    p.rookSemiEg      = 8;
+    p.rookSeventhMg   = 20;
+    p.rookSeventhEg   = 28;
+    p.knightOutpostMg = 24;
+    p.knightOutpostEg = 14;
     return p;
 }
 
@@ -152,6 +175,119 @@ void addMobility(const Board& board, const EvalParams& p, Color c, Bitboard mobA
     }
 }
 
+// --- Pawn-structure masks (built once at compile time) --------------------------
+constexpr uint64_t FILE_A_BITS = 0x0101010101010101ULL;
+
+constexpr std::array<uint64_t, 8> buildFileBB() {
+    std::array<uint64_t, 8> f{};
+    for (int i = 0; i < 8; ++i)
+        f[i] = FILE_A_BITS << i;
+    return f;
+}
+constexpr std::array<uint64_t, 8> FILE_BB = buildFileBB();
+
+constexpr std::array<uint64_t, 8> buildAdjFiles() {
+    std::array<uint64_t, 8> a{};
+    for (int i = 0; i < 8; ++i) {
+        a[i] = (i > 0 ? FILE_BB[i - 1] : 0) | (i < 7 ? FILE_BB[i + 1] : 0);
+    }
+    return a;
+}
+constexpr std::array<uint64_t, 8> ADJ_FILES = buildAdjFiles();
+
+// Passed-pawn front span: the own + adjacent files on every rank strictly ahead of
+// `sq` (toward promotion). A pawn is passed when no enemy pawn sits in this mask.
+constexpr std::array<uint64_t, 64> buildPassedMask(bool white) {
+    std::array<uint64_t, 64> t{};
+    for (int sq = 0; sq < 64; ++sq) {
+        const int f = sq & 7, r = sq >> 3;
+        uint64_t  m = 0;
+        for (int ff = f - 1; ff <= f + 1; ++ff) {
+            if (ff < 0 || ff > 7) continue;
+            for (int rr = 0; rr < 8; ++rr) {
+                if (white ? rr > r : rr < r) m |= 1ULL << (rr * 8 + ff);
+            }
+        }
+        t[sq] = m;
+    }
+    return t;
+}
+constexpr std::array<uint64_t, 64> PASSED_MASK_W = buildPassedMask(true);
+constexpr std::array<uint64_t, 64> PASSED_MASK_B = buildPassedMask(false);
+
+// Accumulate one colour's pawn structure into (mg, eg), scaled by `sign`. Penalizes
+// isolated and doubled pawns, rewards passed pawns by their advancement.
+void addPawnStructure(const Board& board, const EvalParams& p, Color c, int sign, int& mg,
+                      int& eg) {
+    const bool     white  = c == Color::WHITE;
+    const uint64_t own    = board.pieces(PieceType::PAWN, c).getBits();
+    const uint64_t enemy  = board.pieces(PieceType::PAWN, ~c).getBits();
+    const auto&    passed = white ? PASSED_MASK_W : PASSED_MASK_B;
+
+    for (uint64_t bb = own; bb != 0; bb &= bb - 1) {
+        const int sq = std::countr_zero(bb);
+        const int f = sq & 7, r = sq >> 3;
+        if ((own & ADJ_FILES[f]) == 0) {
+            mg += sign * p.isolatedMg;
+            eg += sign * p.isolatedEg;
+        }
+        if ((enemy & passed[sq]) == 0) {
+            const int relRank = white ? r : 7 - r;
+            mg += sign * p.passedMg[relRank];
+            eg += sign * p.passedEg[relRank];
+        }
+    }
+    for (int f = 0; f < 8; ++f) {
+        const int extra = std::popcount(own & FILE_BB[f]) - 1;
+        if (extra > 0) {
+            mg += sign * extra * p.doubledMg;
+            eg += sign * extra * p.doubledEg;
+        }
+    }
+}
+
+// Accumulate one colour's piece terms into (mg, eg), scaled by `sign`. `ownPawnAtt` is
+// the bitboard of squares this colour's pawns attack (used for outposts).
+void addPieceTerms(const Board& board, const EvalParams& p, Color c, Bitboard ownPawnAtt, int sign,
+                   int& mg, int& eg) {
+    const bool     white      = c == Color::WHITE;
+    const uint64_t ownPawns   = board.pieces(PieceType::PAWN, c).getBits();
+    const uint64_t enemyPawns = board.pieces(PieceType::PAWN, ~c).getBits();
+
+    if (board.pieces(PieceType::BISHOP, c).count() >= 2) {
+        mg += sign * p.bishopPairMg;
+        eg += sign * p.bishopPairEg;
+    }
+
+    Bitboard rooks = board.pieces(PieceType::ROOK, c);
+    while (rooks) {
+        const int sq = static_cast<int>(rooks.pop());
+        const int f = sq & 7, r = sq >> 3;
+        if ((ownPawns & FILE_BB[f]) == 0) {
+            const bool open = (enemyPawns & FILE_BB[f]) == 0;
+            mg += sign * (open ? p.rookOpenMg : p.rookSemiMg);
+            eg += sign * (open ? p.rookOpenEg : p.rookSemiEg);
+        }
+        if ((white ? r : 7 - r) == 6) { // relative 7th rank
+            mg += sign * p.rookSeventhMg;
+            eg += sign * p.rookSeventhEg;
+        }
+    }
+
+    Bitboard knights = board.pieces(PieceType::KNIGHT, c);
+    while (knights) {
+        const int sq      = static_cast<int>(knights.pop());
+        const int relRank = white ? (sq >> 3) : 7 - (sq >> 3);
+        if (relRank < 3 || relRank > 5) continue; // outposts live on ranks 4-6
+        if (!ownPawnAtt.check(sq)) continue;      // must be pawn-defended
+        const uint64_t ahead = (white ? PASSED_MASK_W[sq] : PASSED_MASK_B[sq]) & ~FILE_BB[sq & 7];
+        if ((enemyPawns & ahead) == 0) { // no enemy pawn can attack it
+            mg += sign * p.knightOutpostMg;
+            eg += sign * p.knightOutpostEg;
+        }
+    }
+}
+
 } // namespace
 
 const EvalParams DEFAULT_EVAL_PARAMS = buildDefaultParams();
@@ -190,6 +326,14 @@ Value evaluate(const Board& board, const EvalParams& params, Value tempo) {
         attacks::pawnLeftAttacks<CU::BLACK>(bp) | attacks::pawnRightAttacks<CU::BLACK>(bp);
     addMobility(board, params, Color::WHITE, ~board.us(Color::WHITE) & ~bPawnAt, occ, 1, mg, eg);
     addMobility(board, params, Color::BLACK, ~board.us(Color::BLACK) & ~wPawnAt, occ, -1, mg, eg);
+
+    // Pawn structure: isolated/doubled penalties, passed-pawn bonuses.
+    addPawnStructure(board, params, Color::WHITE, 1, mg, eg);
+    addPawnStructure(board, params, Color::BLACK, -1, mg, eg);
+
+    // Piece terms: bishop pair, rook files/7th, knight outposts.
+    addPieceTerms(board, params, Color::WHITE, wPawnAt, 1, mg, eg);
+    addPieceTerms(board, params, Color::BLACK, bPawnAt, -1, mg, eg);
 
     // Early promotions can push the phase above the cap; clamp so the blend stays in
     // [eg, mg].

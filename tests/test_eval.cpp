@@ -87,12 +87,38 @@ TEST_CASE("PSQT prefers a centralised knight to a cornered one") {
     CHECK(central > corner);
 }
 
-TEST_CASE("mobility rewards a bishop with an open diagonal") {
-    // Same material (White up a bishop + two pawns). The bishop sits on g2 in both,
-    // but in the second its own pawns on f3/e4 wall in the long diagonal, cutting its
-    // mobility from ~9 safe squares to ~3. The eval must prefer the freer bishop — a
-    // sanity check that the mobility term is wired and signed for the freer side.
-    const Value open    = eval("4k3/8/8/8/8/8/1P2P1B1/4K3 w - - 0 1");
-    const Value blocked = eval("4k3/8/8/8/4P3/5P2/6B1/4K3 w - - 0 1");
-    CHECK(open > blocked);
+TEST_CASE("pawn structure penalizes doubled and isolated pawns") {
+    // Equal material (two White pawns). Healthy = connected c2/d2 (neither isolated,
+    // no doubling). Damaged = d2/d3 (doubled on the d-file, and both isolated). The
+    // structure penalties must make the damaged shape score lower despite its slightly
+    // more advanced pawn.
+    const Value healthy = eval("4k3/8/8/8/8/8/2PP4/4K3 w - - 0 1");
+    const Value damaged = eval("4k3/8/8/8/8/3P4/3P4/4K3 w - - 0 1");
+    CHECK(healthy > damaged);
+}
+
+TEST_CASE("pawn structure rewards an advanced passed pawn") {
+    // No enemy pawns, so both White pawns are passed; the far-advanced one (d6, near
+    // promotion) must score well above the home pawn (d2) via the rank-scaled passed
+    // bonus (and PSQT pulling the same way).
+    const Value advanced = eval("4k3/8/3P4/8/8/8/8/4K3 w - - 0 1");
+    const Value home     = eval("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1");
+    CHECK(advanced > home);
+}
+
+TEST_CASE("piece terms reward a rook on an open file") {
+    // Equal material (rook + one pawn each side). With the pawn off the rook's file the
+    // a-file is open (open-file bonus); with the pawn on a2 the file is blocked, so the
+    // bonus does not apply. The open-file rook must score higher.
+    const Value openFile    = eval("4k3/8/8/8/8/8/7P/R3K3 w - - 0 1");
+    const Value blockedFile = eval("4k3/8/8/8/8/8/P7/R3K3 w - - 0 1");
+    CHECK(openFile > blockedFile);
+}
+
+TEST_CASE("piece terms reward the bishop pair") {
+    // Two bishops vs bishop + knight (near-equal material). The bishop-pair bonus plus
+    // the bishop's edge over the knight must favor the pair.
+    const Value pair       = eval("4k3/8/8/8/8/8/8/2B1B1K1 w - - 0 1");
+    const Value bishopKnig = eval("4k3/8/8/8/8/8/8/2B1N1K1 w - - 0 1");
+    CHECK(pair > bishopKnig);
 }

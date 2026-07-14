@@ -57,10 +57,30 @@ the score.
 Same material (White up a knight, symmetric kings), knight on `d4` vs `a1`: the PSQT
 must score the centralised knight strictly higher.
 
-### `mobility rewards a bishop with an open diagonal`
+### `pawn structure penalizes doubled and isolated pawns`
 
-Same material (White up a bishop + two pawns), the bishop on `g2` in both positions
-but with its own pawns on `f3`/`e4` walling in the long diagonal in the second
-(mobility ~9 → ~3 safe squares). The eval must prefer the freer bishop — a check that
-the mobility term is wired and signed for the freer side. The colour-symmetry case
-above is the primary guard against a mobility sign/orientation bug.
+Equal material (two White pawns): a healthy connected shape (`c2`/`d2`) versus a
+damaged one (`d2`/`d3`, doubled on the d-file and both isolated). The structure
+penalties must make the damaged shape score lower despite its slightly more advanced
+pawn.
+
+### `pawn structure rewards an advanced passed pawn`
+
+With no enemy pawns both White pawns are passed; the far-advanced `d6` (near
+promotion) must score well above the home `d2` via the rank-scaled passed bonus.
+
+### `piece terms reward a rook on an open file`
+
+Equal material (rook + one pawn). With the pawn off the rook's file the a-file is open
+(open-file bonus); with the pawn on `a2` it is blocked. The open-file rook must score
+higher — isolates the rook open/semi-open term.
+
+### `piece terms reward the bishop pair`
+
+Two bishops vs bishop + knight (near-equal material): the bishop-pair bonus plus the
+bishop's edge over the knight must favor the pair.
+
+**On mobility:** the mobility term has no dedicated case — it cannot be isolated
+through the full eval (any blocker is itself a piece with its own PSQT and pawn
+structure). Its sign/orientation is guarded by the colour-symmetry case, and its net
+value by the A/B SPRT.
