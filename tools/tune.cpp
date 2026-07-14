@@ -20,6 +20,7 @@
 //
 // Usage:
 //   tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N]
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -36,6 +37,7 @@
 using namespace chess;
 using engine::DEFAULT_EVAL_PARAMS;
 using engine::EvalParams;
+using engine::SAFETY_DIM;
 
 namespace {
 
@@ -64,7 +66,8 @@ constexpr int IDX_R7_MG   = IDX_RS_EG + 1; // rook on 7th
 constexpr int IDX_R7_EG   = IDX_R7_MG + 1;
 constexpr int IDX_KO_MG   = IDX_R7_EG + 1; // knight outpost
 constexpr int IDX_KO_EG   = IDX_KO_MG + 1;
-constexpr int NPARAMS     = IDX_KO_EG + 1; // 1022
+constexpr int OFF_KS      = IDX_KO_EG + 1;       // 1022 king-safety danger table (mg-only)
+constexpr int NPARAMS     = OFF_KS + SAFETY_DIM; // 1047
 
 using Vec = std::array<double, NPARAMS>;
 
@@ -100,6 +103,8 @@ Vec flatten(const EvalParams& p) {
     v[IDX_R7_EG]  = p.rookSeventhEg;
     v[IDX_KO_MG]  = p.knightOutpostMg;
     v[IDX_KO_EG]  = p.knightOutpostEg;
+    for (int i = 0; i < SAFETY_DIM; ++i)
+        v[OFF_KS + i] = p.kingDanger[i];
     return v;
 }
 
@@ -108,6 +113,7 @@ const std::array<PieceType, 6> PIECE_TYPES = {PieceType::PAWN, PieceType::KNIGHT
                                               PieceType::ROOK, PieceType::QUEEN,  PieceType::KING};
 const std::array<int, 6>       PHASE_WEIGHT = {0, 1, 1, 2, 4, 0};
 constexpr int                  PHASE_MAX    = 24;
+constexpr std::array<int, 4>   KS_WEIGHT    = {2, 2, 3, 5}; // king-safety attacker weights
 
 constexpr uint64_t FILE_A_BITS = 0x0101010101010101ULL;
 
@@ -280,6 +286,38 @@ Sample makeSample(const Board& board, double result) {
             if ((enemyP & ahead) == 0) addTerm(s.coef, IDX_KO_MG, IDX_KO_EG, sgn, mgF, egF);
         }
     }
+
+    // King safety (mg-only): danger index against each king; the white-relative eval
+    // adds kingDanger[blackIdx] and subtracts kingDanger[whiteIdx].
+    const auto dangerIdx = [&](Color defender) {
+        const Square   kingSq = board.kingSq(defender);
+        const Bitboard zone   = attacks::king(kingSq) | Bitboard::fromSquare(kingSq);
+        const Color    atk    = ~defender;
+        int            weight = 0, count = 0;
+        const auto     tally = [&](int w) {
+            weight += w;
+            ++count;
+        };
+        Bitboard n = board.pieces(PieceType::KNIGHT, atk);
+        while (n) {
+            if (attacks::knight(Square(n.pop())) & zone) tally(KS_WEIGHT[0]);
+        }
+        Bitboard b = board.pieces(PieceType::BISHOP, atk);
+        while (b) {
+            if (attacks::bishop(Square(b.pop()), occ) & zone) tally(KS_WEIGHT[1]);
+        }
+        Bitboard rr = board.pieces(PieceType::ROOK, atk);
+        while (rr) {
+            if (attacks::rook(Square(rr.pop()), occ) & zone) tally(KS_WEIGHT[2]);
+        }
+        Bitboard qq = board.pieces(PieceType::QUEEN, atk);
+        while (qq) {
+            if (attacks::queen(Square(qq.pop()), occ) & zone) tally(KS_WEIGHT[3]);
+        }
+        return count >= 2 ? std::min(weight, SAFETY_DIM - 1) : 0;
+    };
+    s.coef.emplace_back(OFF_KS + dangerIdx(Color::BLACK), mgF);
+    s.coef.emplace_back(OFF_KS + dangerIdx(Color::WHITE), -mgF);
     return s;
 }
 
@@ -483,6 +521,10 @@ void emitOther(const Vec& theta) {
     pair("rookSemi", IDX_RS_MG, IDX_RS_EG);
     pair("rookSeventh", IDX_R7_MG, IDX_R7_EG);
     pair("knightOutpost", IDX_KO_MG, IDX_KO_EG);
+    std::cout << "\n// --- tuned king safety (kingDanger table) ---\np.kingDanger = {";
+    for (int i = 0; i < SAFETY_DIM; ++i)
+        std::cout << std::lround(theta[OFF_KS + i]) << ",";
+    std::cout << "};\n";
 }
 
 } // namespace

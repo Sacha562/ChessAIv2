@@ -31,8 +31,8 @@ where `q` is the **White-relative** static eval of a position and
 
 The eval is a **phase-tapered linear function of its weights**, so it fits *all*
 [`EvalParams`](../src/eval.hpp.md#types) at once — the PSQT tables, the mobility
-tables, the pawn-structure terms, and the piece terms (`NPARAMS` = 1022). All weights
-are flattened
+tables, the pawn-structure terms, the piece terms, and the king-safety danger table
+(`NPARAMS` = 1047). All weights are flattened
 into one vector `theta`, and each position is reduced to a **sparse coefficient
 vector** `c` with `q = dot(theta, c)`. The gradient is then exact and cheap, so the
 tuner uses **gradient descent (Adam)**, converging in seconds. Steps:
@@ -118,10 +118,11 @@ before committing — no eval change ships on the tuner's word alone.
 - **Data quality is everything.** The result label must reflect *this eval's*
   judgment, so tune on the engine's own self-play, not a GM/human database (the
   positions and outcomes are off-distribution). See [PLAN.md](../PLAN.md) §18.
-- **Models every current eval term** (PSQT + mobility + pawn structure + piece terms)
-  via the faithfulness-checked trace, but by policy **actively tunes** only the
-  non-king piece PSQTs, the isolated/doubled terms, and the piece terms; the king
-  PSQT, mobility, and passed-pawn tables are frozen (see
+- **Models every current eval term** (PSQT + mobility + pawn structure + piece terms +
+  king-safety table) via the faithfulness-checked trace, but by policy **actively
+  tunes** only the non-king piece PSQTs, the isolated/doubled terms, the piece terms,
+  and the king-safety table; the king PSQT, mobility, and passed-pawn tables are frozen
+  (see
   [Overfit control](#overfit-control-why-a-naive-tune-regresses)). When a **new** eval
   term is added (e.g. king safety), `makeSample` and the parameter layout must be
   extended to include it — the load-time faithfulness check is the tripwire: it fails
