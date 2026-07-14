@@ -60,8 +60,9 @@ Value eval(const std::string& fen) {
 TEST_CASE("evaluation is colour-symmetric") {
     const char* fens[] = {
         "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w - - 0 1", // an open game
+        "r2q1rk1/pp3ppp/2n1bn2/2b5/8/2NBBN2/PP3PPP/R2Q1RK1 w - - 0 1",   // pieces near both kings
         "4k3/8/8/3N4/8/2b5/8/4K3 b - - 0 1",                             // lopsided minors
-        "8/2p2p2/1p4p1/p6p/P6P/1P4P1/2P2P2/8 w - - 0 1",                 // pawns only
+        "6k1/2p2p2/1p4p1/p6p/P6P/1P4P1/2P2P2/6K1 w - - 0 1",             // pawns + kings
     };
     for (const char* fen : fens) {
         CHECK(eval(fen) == eval(mirrorFen(fen)));

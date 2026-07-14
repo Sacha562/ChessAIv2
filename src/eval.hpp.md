@@ -8,8 +8,9 @@ is called once per quiescence leaf, so it must stay cheap.
 Phase 1c evaluation is a **tapered piece-square-table (PSQT) sum** with material
 folded in (a "PeSTO"-style eval), plus a **mobility** term, a **pawn-structure** term
 (isolated / doubled / passed), **piece terms** (bishop pair, rook on open/semi-open
-file, rook on the 7th, knight outpost), and a caller-supplied tempo bonus. King safety
-arrives later in Phase 1c (see [PLAN.md](../PLAN.md) §17); NNUE in Phase 2.
+file, rook on the 7th, knight outpost), a **king-safety** term (attack-unit danger on
+the king zone), and a caller-supplied tempo bonus. This completes the Phase 1c HCE
+feature set (see [PLAN.md](../PLAN.md) §17); NNUE is Phase 2.
 All weights are **Texel-tunable** — they live in a plain data block (`EvalParams`)
 rather than hard-coded constants. Current defaults are **seeds**: PeSTO PSQTs
 (already expertly tuned, kept as-is), a mobility ramp (SPRT-confirmed +58), and
@@ -32,9 +33,10 @@ tuner ([tools/tune.cpp.md](../tools/tune.cpp.md)) is aimed at future *un-tuned* 
   (`MOB_CENTER`/`MOB_MG_SLOPE`/`MOB_EG_SLOPE`/`MOB_MAX`) — plus the phase weights
   (`PHASE_WEIGHT`, `PHASE_MAX`), the `PIECE_TYPES` index map, the mobility indices
   (`MOB_KNIGHT`…`MOB_QUEEN`), the pawn-structure masks (`FILE_BB`, `ADJ_FILES`,
-  `PASSED_MASK_W`/`PASSED_MASK_B` and their builders), the `buildDefaultParams` folder
-  (folds material into the deltas and seeds the mobility/pawn/piece tables), and the
-  `addMobility` / `addPawnStructure` / `addPieceTerms` helpers all live in an anonymous namespace in
+  `PASSED_MASK_W`/`PASSED_MASK_B` and their builders), the king-safety
+  attacker weights (`KS_WEIGHT`), the `buildDefaultParams` folder (folds material into
+  the deltas and seeds the mobility/pawn/piece/king-safety tables), and the
+  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` helpers all live in an anonymous namespace in
   `eval.cpp` — internal linkage, **not** public API. The tempo bonus is not a constant
   here: it is passed in as the `tempo` argument (a self-play knob held by
   [`Tunables`](search.hpp.md#struct-tunables)).
@@ -60,6 +62,7 @@ folded in.
 | `rookSemiMg` / `rookSemiEg` | `int16_t` | Bonus for a rook on a file with no friendly pawns (enemy pawns present). |
 | `rookSeventhMg` / `rookSeventhEg` | `int16_t` | Bonus for a rook on its relative 7th rank. |
 | `knightOutpostMg` / `knightOutpostEg` | `int16_t` | Bonus for a knight on the relative 4th–6th rank, pawn-defended, that no enemy pawn can attack. |
+| `kingDanger` | `std::array<int16_t, SAFETY_DIM>` | Midgame danger penalty indexed by the summed attack weight of enemy pieces on the king zone (≥ 2 attackers required); an S-curve of positive penalties. |
 
 - **Piece index (0..5):** `P, N, B, R, Q, K`, matching `PIECE_TYPES` in `eval.cpp`.
 - **Square orientation:** tables are stored in **White's a8-first view** (index 0 =
@@ -127,6 +130,17 @@ and passed-front-span masks. Accumulated into the same tapered `mg`/`eg` sums. A
 **pawn hash** (caching this by pawn Zobrist, since pawn structure changes rarely) is a
 planned NPS optimization — the term is recomputed from scratch for now.
 
+**King safety:** for each king, sum an **attack weight** over the enemy
+knights/bishops/rooks/queens that attack the king zone (the king's square + its
+neighbours) — weights knight/bishop 2, rook 3, queen 5 (`KS_WEIGHT`). Only when **≥ 2**
+attackers bear on the zone, the summed weight (clamped to `[0, SAFETY_DIM)`) indexes
+the `kingDanger` table; the penalty is subtracted from the defending side (White gains
+from the danger to Black's king and loses from its own). The nonlinear S-curve lives in
+the *table values*, so the eval stays **linear in the tunable entries**. Added to `mg`
+only, so the taper fades king safety toward zero in the endgame where the king is safe.
+This is the highest-payoff term in sharp positions and the most expensive (it regenerates
+each attacker's attacks); a first version, without pawn shield/storm.
+
 **Piece terms:** the **bishop pair** bonus (≥ 2 bishops); per rook, an **open-file**
 (no pawns of either colour) or **semi-open-file** (no friendly pawns) bonus and a
 **7th-rank** bonus (relative rank 7); per knight, an **outpost** bonus when it sits on
@@ -138,11 +152,13 @@ outpost test reuses the mobility pawn-attack bitboards, passed in per colour.
 
 **Performance:** per-leaf hot path. Recomputed from scratch each call — a bitboard
 pop-loop per piece type for the PSQT sum; a sliding `attacks::` lookup per
-knight/bishop/rook/queen plus a popcount for mobility; and a per-pawn scan plus
-per-file popcounts for pawn structure. Mobility is the dominant added cost. Two
-planned optimizations: an **incremental** PSQT sum on make/unmake (the discipline
-NNUE's accumulator will reuse in Phase 2), and a **pawn hash** caching the
-pawn-structure score. From-scratch is correct and simple for now.
+knight/bishop/rook/queen plus a popcount for mobility; a per-pawn scan plus per-file
+popcounts for pawn structure; and, for king safety, a second sliding-attack pass over
+each side's pieces to test overlap with the enemy king zone. Mobility and king safety
+are the dominant added costs. Planned optimizations: an **incremental** PSQT sum on
+make/unmake (the discipline NNUE's accumulator reuses in Phase 2), a **pawn hash**
+caching the pawn-structure score, and skipping king safety at low game phase (endgame).
+From-scratch is correct and simple for now.
 
 **Warnings:**
 - The tempo bonus is applied **after** the perspective flip, so it always favors the

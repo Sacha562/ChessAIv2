@@ -4,6 +4,10 @@
 
 namespace engine {
 
+// King-safety danger table size: indexed by the summed attack weight of enemy pieces
+// bearing on the king zone (clamped to [0, SAFETY_DIM)). Index 0 = safe king.
+constexpr int SAFETY_DIM = 25;
+
 // Tunable evaluation weights: combined piece-square tables with material folded in,
 // one midgame (`mg`) and one endgame (`eg`) centipawn value per
 // (piece type 0..5 = P,N,B,R,Q,K; square 0..63). Tables are stored in White's
@@ -43,6 +47,12 @@ struct EvalParams {
     int16_t rookSemiMg{}, rookSemiEg{};
     int16_t rookSeventhMg{}, rookSeventhEg{};
     int16_t knightOutpostMg{}, knightOutpostEg{};
+
+    // King safety: a midgame danger penalty indexed by the summed attack weight of the
+    // enemy pieces bearing on the king zone (only counted when >= 2 attackers). Entries
+    // are positive penalties (subtracted from the defending side); an S-curve shape.
+    // Midgame-only, so the taper scales it to ~0 in the endgame where the king is safe.
+    std::array<int16_t, SAFETY_DIM> kingDanger{};
 };
 
 // PeSTO/Kaufman-seeded defaults, baked at namespace scope (see eval.cpp). The search

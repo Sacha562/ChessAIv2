@@ -37,10 +37,12 @@ Also run as part of the commit gate ([run_checks.py.md](../scripts/run_checks.py
 
 ### `evaluation is colour-symmetric`
 
-For several positions (an open game, lopsided minors, a pawns-only ending),
-`eval(pos) == eval(mirrorFen(pos))`. Because the eval is side-to-move-relative, a
-position and its colour-swapped mirror score **equal** from each mover's own
-perspective. A failure is an orientation bug in the `^ 56` table mapping.
+For several positions (an open game, a castled middlegame with pieces bearing on both
+kings, lopsided minors, a pawns + kings ending), `eval(pos) == eval(mirrorFen(pos))`.
+Because the eval is side-to-move-relative, a position and its colour-swapped mirror
+score **equal** from each mover's own perspective. This is the primary guard for the
+terms that can't be isolated positionally — **mobility** and **king safety** (the
+castled position exercises both) — as well as the PSQT `^ 56` orientation.
 
 ### `a symmetric position is level`
 
@@ -80,7 +82,7 @@ higher — isolates the rook open/semi-open term.
 Two bishops vs bishop + knight (near-equal material): the bishop-pair bonus plus the
 bishop's edge over the knight must favor the pair.
 
-**On mobility:** the mobility term has no dedicated case — it cannot be isolated
-through the full eval (any blocker is itself a piece with its own PSQT and pawn
-structure). Its sign/orientation is guarded by the colour-symmetry case, and its net
-value by the A/B SPRT.
+**On mobility and king safety:** neither has a dedicated positional case — they cannot
+be cleanly isolated through the full eval (any attacker/blocker is itself a piece with
+its own PSQT and structure). Their sign/orientation is guarded by the colour-symmetry
+case (the castled position drives both), and their net value by the A/B SPRT.

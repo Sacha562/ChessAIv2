@@ -1,5 +1,6 @@
 #include "eval.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 
@@ -128,6 +129,10 @@ constexpr EvalParams buildDefaultParams() {
     p.rookSeventhEg   = 28;
     p.knightOutpostMg = 24;
     p.knightOutpostEg = 14;
+    // King-safety seed: an S-curve (quadratic then capped) over the attack-weight
+    // index. Positive penalties; untuned starting point.
+    for (int i = 0; i < SAFETY_DIM; ++i)
+        p.kingDanger[i] = static_cast<int16_t>(std::min(i * i * 2, 480));
     return p;
 }
 
@@ -288,6 +293,49 @@ void addPieceTerms(const Board& board, const EvalParams& p, Color c, Bitboard ow
     }
 }
 
+// Attacker-piece weights for the king-safety count (knight, bishop, rook, queen).
+constexpr std::array<int, 4> KS_WEIGHT = {2, 2, 3, 5};
+
+// Danger index against `defender`'s king: the summed weight of enemy pieces attacking
+// the king zone (king square + its neighbours), counted only when >= 2 pieces attack.
+// Clamped to the safety table's range. Returns 0 (safe) below the 2-attacker threshold.
+int kingDangerIndex(const Board& board, Color defender, Bitboard occ) {
+    const Square   kingSq = board.kingSq(defender);
+    const Bitboard zone   = attacks::king(kingSq) | Bitboard::fromSquare(kingSq);
+    const Color    atk    = ~defender;
+
+    int      weight = 0, count = 0;
+    Bitboard knights = board.pieces(PieceType::KNIGHT, atk);
+    while (knights) {
+        if (attacks::knight(Square(knights.pop())) & zone) {
+            weight += KS_WEIGHT[0];
+            ++count;
+        }
+    }
+    Bitboard bishops = board.pieces(PieceType::BISHOP, atk);
+    while (bishops) {
+        if (attacks::bishop(Square(bishops.pop()), occ) & zone) {
+            weight += KS_WEIGHT[1];
+            ++count;
+        }
+    }
+    Bitboard rooks = board.pieces(PieceType::ROOK, atk);
+    while (rooks) {
+        if (attacks::rook(Square(rooks.pop()), occ) & zone) {
+            weight += KS_WEIGHT[2];
+            ++count;
+        }
+    }
+    Bitboard queens = board.pieces(PieceType::QUEEN, atk);
+    while (queens) {
+        if (attacks::queen(Square(queens.pop()), occ) & zone) {
+            weight += KS_WEIGHT[3];
+            ++count;
+        }
+    }
+    return count >= 2 ? std::min(weight, SAFETY_DIM - 1) : 0;
+}
+
 } // namespace
 
 const EvalParams DEFAULT_EVAL_PARAMS = buildDefaultParams();
@@ -334,6 +382,11 @@ Value evaluate(const Board& board, const EvalParams& params, Value tempo) {
     // Piece terms: bishop pair, rook files/7th, knight outposts.
     addPieceTerms(board, params, Color::WHITE, wPawnAt, 1, mg, eg);
     addPieceTerms(board, params, Color::BLACK, bPawnAt, -1, mg, eg);
+
+    // King safety (midgame): White gains from the danger to Black's king and loses from
+    // the danger to its own. Added to mg only, so the taper fades it out in the endgame.
+    mg += params.kingDanger[kingDangerIndex(board, Color::BLACK, occ)] -
+          params.kingDanger[kingDangerIndex(board, Color::WHITE, occ)];
 
     // Early promotions can push the phase above the cap; clamp so the blend stays in
     // [eg, mg].
