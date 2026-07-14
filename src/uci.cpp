@@ -186,7 +186,7 @@ void Engine::handleSetOption(std::istringstream& is) {
         } else if (name == "LmrDivisor" && !value.empty()) {
             tunables_.lmrDivisor = std::clamp(std::stoi(value), 50, 500);
         } else if (name == "NmpBase" && !value.empty()) {
-            tunables_.nmpBase = std::clamp(std::stoi(value), 1, 6);
+            tunables_.nmpBase = std::clamp(std::stoi(value), 0, 6);
         } else if (name == "NmpEvalDiv" && !value.empty()) {
             tunables_.nmpEvalDiv = std::clamp(std::stoi(value), 50, 600);
         } else if (name == "RfpMargin" && !value.empty()) {
@@ -196,7 +196,7 @@ void Engine::handleSetOption(std::istringstream& is) {
         } else if (name == "FutBase" && !value.empty()) {
             tunables_.futBase = std::clamp(std::stoi(value), 0, 400);
         } else if (name == "LmpBase" && !value.empty()) {
-            tunables_.lmpBase = std::clamp(std::stoi(value), 1, 12);
+            tunables_.lmpBase = std::clamp(std::stoi(value), 0, 12);
         }
         // Phase 1c singular-extension knobs (SPSA-tunable).
         else if (name == "SingularMinDepth" && !value.empty()) {
@@ -244,12 +244,12 @@ void Engine::loop() {
                       << "option name AspirationDelta type spin default 15 min 1 max 500\n"
                       << "option name LmrBase type spin default 70 min 0 max 200\n"
                       << "option name LmrDivisor type spin default 208 min 50 max 500\n"
-                      << "option name NmpBase type spin default 1 min 1 max 6\n"
+                      << "option name NmpBase type spin default 1 min 0 max 6\n"
                       << "option name NmpEvalDiv type spin default 177 min 50 max 600\n"
                       << "option name RfpMargin type spin default 68 min 10 max 300\n"
                       << "option name FutMargin type spin default 105 min 10 max 300\n"
                       << "option name FutBase type spin default 94 min 0 max 400\n"
-                      << "option name LmpBase type spin default 1 min 1 max 12\n"
+                      << "option name LmpBase type spin default 1 min 0 max 12\n"
                       << "option name SingularMinDepth type spin default 8 min 4 max 12\n"
                       << "option name SingularMargin type spin default 2 min 1 max 8\n"
                       << "option name SingularDoubleMargin type spin default 20 min 0 max 200\n"
