@@ -89,8 +89,8 @@ and `EndgamePieces`, plus the selective-search toggles (`spin`, `0`/`1`) used to
 A/B-isolate each signal's Elo: the ordering signals `UseKillers`, `UseHistory`,
 `UseCountermove`, `UseIIR` (all default `1` — history and IIR both inverted from step-1
 losses to wins once LMP/LMR existed to consume them: history −23 → +247, IIR −36 → +16),
-`UseContHist` (Phase 1c continuation history, **default `0`** — A/B-neutral vs 0.1b at the
-material-only eval, −19 ± 24 Elo, kept for a post-HCE re-test), and the pruning /
+`UseContHist` (Phase 1c continuation history, **default `1`** — A/B-neutral at the
+material-only eval but +7 ± 8 Elo once the full HCE eval landed), and the pruning /
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
 `1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `15`, the initial aspiration half-window in

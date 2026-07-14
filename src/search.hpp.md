@@ -95,7 +95,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
 | `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
-| `useContHist` | `bool` | `false` | Enable continuation history (Phase 1c) (`UseContHist`). **Default off**: measured A/B-neutral vs 0.1b (−19 ± 24 Elo, 436 games) at the current material-only eval; re-test once the HCE eval lands. |
+| `useContHist` | `bool` | `true` | Enable continuation history (Phase 1c) (`UseContHist`). **Default on**: A/B-neutral at the material-only eval (−19 ± 24 Elo, 436 games) but +7 ± 8 Elo (51.0%, 3264 games) once the full HCE eval landed — its value scales with eval sophistication. |
 | `useIir` | `bool` | `true` | Enable Internal Iterative Reduction (`UseIIR`). |
 | `useNmp` | `bool` | `true` | Enable null-move pruning (`UseNMP`). |
 | `useRfp` | `bool` | `true` | Enable reverse futility / static null-move pruning (`UseRFP`). |
@@ -143,13 +143,12 @@ singular margins are exposed as UCI options so SPSA can tune them, while
 
 **Default rationale (A/B vs release 0.1b @ STC 10+0.1, UHO book).** Isolated:
 **singular extensions +24 Elo** (`UseSingular` alone, `UseContHist` off — a gainer, so
-**default on**); **continuation history −19 ± 24 Elo** (`UseContHist` alone, `UseSingular`
-off — A/B-neutral / slightly negative at the current material-only eval, so **default
-off**). Continuation history is kept fully wired and UCI-tunable for a re-test after the
-HCE eval lands — like [`History`](history.hpp.md)'s butterfly/IIR signals, which were
-negative in isolation pre-pruning (−23 / −36) and flipped to large wins (+247 / +16) once
-the rest of the stack existed to consume them, an ordering refinement's Elo depends on how
-much positional structure the eval exposes.
+**default on**); **continuation history −19 ± 24 Elo** at the material-only eval, which
+**flipped to +7 ± 8 Elo** (51.0%, 3264 games) once the full HCE eval landed, so it is now
+**default on**. This is [`History`](history.hpp.md)'s butterfly/IIR pattern again — those
+signals were negative in isolation pre-pruning (−23 / −36) and flipped to large wins
+(+247 / +16) once the rest of the stack existed to consume them: an ordering refinement's
+Elo depends on how much positional structure the eval exposes.
 
 **Default rationale (A/B @ 8+0.08 vs the same binary):** all four are **on**. Killers
 **+44 Elo** and countermove **~0**. Butterfly **history** and **IIR** both *inverted*

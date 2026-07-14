@@ -231,7 +231,7 @@ void Engine::loop() {
                       << "option name UseKillers type spin default 1 min 0 max 1\n"
                       << "option name UseHistory type spin default 1 min 0 max 1\n"
                       << "option name UseCountermove type spin default 1 min 0 max 1\n"
-                      << "option name UseContHist type spin default 0 min 0 max 1\n"
+                      << "option name UseContHist type spin default 1 min 0 max 1\n"
                       << "option name UseIIR type spin default 1 min 0 max 1\n"
                       << "option name UseNMP type spin default 1 min 0 max 1\n"
                       << "option name UseRFP type spin default 1 min 0 max 1\n"

@@ -52,10 +52,10 @@ struct Tunables {
     bool useKillers     = true;
     bool useHistory     = true;
     bool useCountermove = true;
-    bool useContHist    = false; // continuation history (Phase 1c): A/B-neutral vs 0.1b at the
-                                 // current material-only eval (-19 +/- 24 Elo, 436g) -- default
-                                 // OFF until re-tested once the HCE eval lands (its value scales
-                                 // with eval sophistication). Kept wired + tested via UseContHist.
+    bool useContHist    = true; // continuation history (Phase 1c). Its Elo scales with eval
+                                // sophistication: A/B-neutral at the material-only eval
+                                // (-19 +/- 24 Elo, 436g) but +7 +/- 8 Elo (51.0%, 3264g) once
+                                // the full HCE eval landed -- so default ON. UCI: UseContHist.
     bool useIir = true;
 
     // Phase 1b pruning / reduction / extension toggles (each individually ablatable).
