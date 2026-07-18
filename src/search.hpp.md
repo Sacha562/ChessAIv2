@@ -106,22 +106,26 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useSingular` | `bool` | `true` | Enable singular extensions (Phase 1c) (`UseSingular`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
-| `lmrBase` | `int` | `70` | LMR reduction offset ×100 (`LmrBase`); `0.70` in the curve. |
-| `lmrDivisor` | `int` | `208` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `2.08` in the curve (kept ≥ 1). |
+| `lmrBase` | `int` | `68` | LMR reduction offset ×100 (`LmrBase`); `0.68` in the curve. |
+| `lmrDivisor` | `int` | `162` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.62` in the curve (kept ≥ 1). |
 | `nmpBase` | `int` | `1` | Null-move base reduction `R` (`NmpBase`). |
-| `nmpEvalDiv` | `int` | `177` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `nmpEvalDiv` | `int` | `176` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
 | `rfpMargin` | `Value` | `68` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
-| `futMargin` | `Value` | `105` | Futility margin per remaining ply, cp (`FutMargin`). |
-| `futBase` | `Value` | `94` | Futility base margin, cp (`FutBase`). |
-| `lmpBase` | `int` | `1` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
-| `singularMinDepth` | `int` | `8` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
-| `singularMargin` | `int` | `2` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
-| `singularDoubleMargin` | `int` | `20` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
+| `futMargin` | `Value` | `86` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `77` | Futility base margin, cp (`FutBase`). |
+| `lmpBase` | `int` | `4` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+| `singularMinDepth` | `int` | `7` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
+| `singularMargin` | `int` | `1` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
+| `singularDoubleMargin` | `int` | `46` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
 
-The **forward-pruning margins** (`lmrBase` … `lmpBase`) are exposed as UCI options (not
-`constexpr`) so **SPSA** self-play can tune them without a rebuild. The defaults above are
-**SPSA-tuned** (OpenBench, 96k games @ STC): the tuned set beat the first-cut values by
-**+82 ± 20 Elo** (SPRT accepted). `NmpBase` and `LmpBase` sit at their tuning floor of 1.
+The **forward-pruning margins** (`lmrBase` … `lmpBase`) and the **singular knobs**
+(`singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are exposed as UCI options
+(not `constexpr`) so **SPSA** self-play can tune them without a rebuild. They were first
+SPSA-tuned at the end of Phase 1b on the material-only eval (**+82 ± 20 Elo**), then
+**re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the singular knobs,
+96k games @ STC 10+0.1) — the re-tuned set above beat the Phase 1b defaults by **+26.2 ± 10
+Elo** (SPRT accepted @ LTC 40+0.4). The `NmpBase` / `LmpBase` tuning floor was relaxed from
+1 to 0 for that re-tune; `LmpBase` then settled at `4` and `NmpBase` stayed at `1`.
 Only the margins are tunable; the structural gates (min depths, `LMR_MIN_MOVES`, etc.) stay
 `constexpr`. `lmrBase` / `lmrDivisor` are integer-scaled ×100 because the tuner works in
 integers; they are divided when the LMR table is (re)built

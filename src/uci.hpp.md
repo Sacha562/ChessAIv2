@@ -98,14 +98,14 @@ cp), plus the **SPSA-tunable forward-pruning
 margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
 `NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, and the **Phase 1c
 singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin` — all exposed
-as `spin` options so a self-play tuner can perturb them without a rebuild. The Phase 1b
-margin defaults are the **SPSA-tuned** values (OpenBench, 96k games; the tuned set beat the
-first-cut constants by **+82 ± 20 Elo**, SPRT accepted); the singular knobs ship at
-first-cut values pending their own tune. `NmpBase` and `LmpBase` advertise `min 0` (not
-`1`): both **railed at the old floor of `1`** in that tune (the optimiser wanted to go
-lower but was clamped), so the floor is relaxed to `0` to let a follow-up re-tune — on the
-now-complete Phase 1c HCE eval, against which these margins were never tuned — explore the
-lower range. `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
+as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
+the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eval, **+82 ±
+20 Elo**), then **re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the
+singular knobs, 96k games @ STC), which beat the Phase 1b defaults by **+26.2 ± 10 Elo**
+(SPRT accepted @ LTC 40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
+**railed at the old floor of `1`** in the Phase 1b tune, so the floor was relaxed to `0` for
+the re-tune — which then settled `LmpBase` at `4` and kept `NmpBase` at `1` (neither wanted
+below 1). `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
 term dominates at `depth ≥ NMP_MIN_DEPTH`); `LmpBase 0` is a pure `depth²` quiet count, and
 move 1 is never pruned (`moveCount > 1` guard). Each is advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
