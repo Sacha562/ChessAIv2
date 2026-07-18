@@ -9,8 +9,9 @@ Phase 1c evaluation is a **tapered piece-square-table (PSQT) sum** with material
 folded in (a "PeSTO"-style eval), plus a **mobility** term, a **pawn-structure** term
 (isolated / doubled / passed), **piece terms** (bishop pair, rook on open/semi-open
 file, rook on the 7th, knight outpost), a **king-safety** term (attack-unit danger on
-the king zone), and a caller-supplied tempo bonus. This completes the Phase 1c HCE
-feature set (see [PLAN.md](../PLAN.md) §17); NNUE is Phase 2.
+the king zone plus a **pawn-shield** shelter bonus), and a caller-supplied tempo bonus.
+This completes the Phase 1c HCE feature set (see [PLAN.md](../PLAN.md) §17); NNUE is
+Phase 2.
 All weights are **Texel-tunable** — they live in a plain data block (`EvalParams`)
 rather than hard-coded constants. Current defaults are **seeds**: PeSTO PSQTs
 (already expertly tuned, kept as-is), a mobility ramp (SPRT-confirmed +58), and
@@ -34,9 +35,12 @@ tuner ([tools/tune.cpp.md](../tools/tune.cpp.md)) is aimed at future *un-tuned* 
   (`PHASE_WEIGHT`, `PHASE_MAX`), the `PIECE_TYPES` index map, the mobility indices
   (`MOB_KNIGHT`…`MOB_QUEEN`), the pawn-structure masks (`FILE_BB`, `ADJ_FILES`,
   `PASSED_MASK_W`/`PASSED_MASK_B` and their builders), the king-safety
-  attacker weights (`KS_WEIGHT`), the `buildDefaultParams` folder (folds material into
-  the deltas and seeds the mobility/pawn/piece/king-safety tables), and the
-  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` helpers all live in an anonymous namespace in
+  attacker weights (`KS_WEIGHT`), the king pawn-shield masks
+  (`SHIELD_NEAR_W`/`SHIELD_FAR_W`/`SHIELD_NEAR_B`/`SHIELD_FAR_B` and their
+  `buildShieldMask`), the `buildDefaultParams` folder (folds material into
+  the deltas and seeds the mobility/pawn/piece/king-safety/shield tables), and the
+  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` / `addKingShield`
+  helpers all live in an anonymous namespace in
   `eval.cpp` — internal linkage, **not** public API. The tempo bonus is not a constant
   here: it is passed in as the `tempo` argument (a self-play knob held by
   [`Tunables`](search.hpp.md#struct-tunables)).
@@ -63,6 +67,7 @@ folded in.
 | `rookSeventhMg` / `rookSeventhEg` | `int16_t` | Bonus for a rook on its relative 7th rank. |
 | `knightOutpostMg` / `knightOutpostEg` | `int16_t` | Bonus for a knight on the relative 4th–6th rank, pawn-defended, that no enemy pawn can attack. |
 | `kingDanger` | `std::array<int16_t, SAFETY_DIM>` | Midgame danger penalty indexed by the summed attack weight of enemy pieces on the king zone (≥ 2 attackers required); an S-curve of positive penalties. |
+| `kingShieldNearMg` / `kingShieldFarMg` | `int16_t` | Midgame-only bonus per friendly pawn sheltering the king, on the rank immediately in front (`Near`) / one rank beyond (`Far`), over the three files centred on the king. |
 
 - **Piece index (0..5):** `P, N, B, R, Q, K`, matching `PIECE_TYPES` in `eval.cpp`.
 - **Square orientation:** tables are stored in **White's a8-first view** (index 0 =
@@ -139,7 +144,16 @@ from the danger to Black's king and loses from its own). The nonlinear S-curve l
 the *table values*, so the eval stays **linear in the tunable entries**. Added to `mg`
 only, so the taper fades king safety toward zero in the endgame where the king is safe.
 This is the highest-payoff term in sharp positions and the most expensive (it regenerates
-each attacker's attacks); a first version, without pawn shield/storm.
+each attacker's attacks).
+
+**King pawn shield:** on top of the danger table, each king scores a shelter bonus
+(`addKingShield`) for its own pawns standing in front of it — the three files centred on
+the king (clamped inboard so an edge king still spans three files), split into the rank
+immediately ahead (`kingShieldNearMg`) and the next rank up (`kingShieldFarMg`). The bands
+are compile-time masks (`SHIELD_NEAR_*`/`SHIELD_FAR_*`); the score is a popcount of
+friendly pawns in each band times its weight, added to `mg` only (shelter is a midgame
+concern), White positive and Black negative. Seeds `10`/`4` (near shelters more than far).
+Pawn **storm** (enemy pawns advancing on the king) is still TODO.
 
 **Piece terms:** the **bishop pair** bonus (≥ 2 bishops); per rook, an **open-file**
 (no pawns of either colour) or **semi-open-file** (no friendly pawns) bonus and a

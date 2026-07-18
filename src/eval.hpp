@@ -53,6 +53,12 @@ struct EvalParams {
     // are positive penalties (subtracted from the defending side); an S-curve shape.
     // Midgame-only, so the taper scales it to ~0 in the endgame where the king is safe.
     std::array<int16_t, SAFETY_DIM> kingDanger{};
+
+    // King pawn shield (midgame-only bonus): friendly pawns sheltering the king across
+    // the three files centred on it (shifted inboard at the edge). `Near` scores a pawn
+    // on the rank immediately in front of the king, `Far` one rank beyond; pawns on both
+    // are the ideal shelter. Positive bonuses, credited to the defending side.
+    int16_t kingShieldNearMg{}, kingShieldFarMg{};
 };
 
 // PeSTO/Kaufman-seeded defaults, baked at namespace scope (see eval.cpp). The search

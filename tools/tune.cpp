@@ -46,28 +46,30 @@ constexpr int N_PSQT = 6 * 64; // per phase
 constexpr int N_MOB  = 4 * 28; // per phase (knight, bishop, rook, queen)
 constexpr int N_PASS = 8;      // per phase (by relative rank)
 
-constexpr int OFF_PSQT_MG = 0;
-constexpr int OFF_PSQT_EG = OFF_PSQT_MG + N_PSQT; // 384
-constexpr int OFF_MOB_MG  = OFF_PSQT_EG + N_PSQT; // 768
-constexpr int OFF_MOB_EG  = OFF_MOB_MG + N_MOB;   // 880
-constexpr int OFF_PASS_MG = OFF_MOB_EG + N_MOB;   // 992
-constexpr int OFF_PASS_EG = OFF_PASS_MG + N_PASS; // 1000
-constexpr int IDX_ISO_MG  = OFF_PASS_EG + N_PASS; // 1008
-constexpr int IDX_ISO_EG  = IDX_ISO_MG + 1;       // 1009
-constexpr int IDX_DBL_MG  = IDX_ISO_EG + 1;       // 1010
-constexpr int IDX_DBL_EG  = IDX_DBL_MG + 1;       // 1011
-constexpr int IDX_BP_MG   = IDX_DBL_EG + 1;       // 1012 bishop pair
-constexpr int IDX_BP_EG   = IDX_BP_MG + 1;
-constexpr int IDX_RO_MG   = IDX_BP_EG + 1; // rook open file
-constexpr int IDX_RO_EG   = IDX_RO_MG + 1;
-constexpr int IDX_RS_MG   = IDX_RO_EG + 1; // rook semi-open file
-constexpr int IDX_RS_EG   = IDX_RS_MG + 1;
-constexpr int IDX_R7_MG   = IDX_RS_EG + 1; // rook on 7th
-constexpr int IDX_R7_EG   = IDX_R7_MG + 1;
-constexpr int IDX_KO_MG   = IDX_R7_EG + 1; // knight outpost
-constexpr int IDX_KO_EG   = IDX_KO_MG + 1;
-constexpr int OFF_KS      = IDX_KO_EG + 1;       // 1022 king-safety danger table (mg-only)
-constexpr int NPARAMS     = OFF_KS + SAFETY_DIM; // 1047
+constexpr int OFF_PSQT_MG  = 0;
+constexpr int OFF_PSQT_EG  = OFF_PSQT_MG + N_PSQT; // 384
+constexpr int OFF_MOB_MG   = OFF_PSQT_EG + N_PSQT; // 768
+constexpr int OFF_MOB_EG   = OFF_MOB_MG + N_MOB;   // 880
+constexpr int OFF_PASS_MG  = OFF_MOB_EG + N_MOB;   // 992
+constexpr int OFF_PASS_EG  = OFF_PASS_MG + N_PASS; // 1000
+constexpr int IDX_ISO_MG   = OFF_PASS_EG + N_PASS; // 1008
+constexpr int IDX_ISO_EG   = IDX_ISO_MG + 1;       // 1009
+constexpr int IDX_DBL_MG   = IDX_ISO_EG + 1;       // 1010
+constexpr int IDX_DBL_EG   = IDX_DBL_MG + 1;       // 1011
+constexpr int IDX_BP_MG    = IDX_DBL_EG + 1;       // 1012 bishop pair
+constexpr int IDX_BP_EG    = IDX_BP_MG + 1;
+constexpr int IDX_RO_MG    = IDX_BP_EG + 1; // rook open file
+constexpr int IDX_RO_EG    = IDX_RO_MG + 1;
+constexpr int IDX_RS_MG    = IDX_RO_EG + 1; // rook semi-open file
+constexpr int IDX_RS_EG    = IDX_RS_MG + 1;
+constexpr int IDX_R7_MG    = IDX_RS_EG + 1; // rook on 7th
+constexpr int IDX_R7_EG    = IDX_R7_MG + 1;
+constexpr int IDX_KO_MG    = IDX_R7_EG + 1; // knight outpost
+constexpr int IDX_KO_EG    = IDX_KO_MG + 1;
+constexpr int OFF_KS       = IDX_KO_EG + 1;       // 1022 king-safety danger table (mg-only)
+constexpr int IDX_KSH_NEAR = OFF_KS + SAFETY_DIM; // 1047 king shield, near band (mg-only)
+constexpr int IDX_KSH_FAR  = IDX_KSH_NEAR + 1;    // 1048 king shield, far band (mg-only)
+constexpr int NPARAMS      = IDX_KSH_FAR + 1;     // 1049
 
 using Vec = std::array<double, NPARAMS>;
 
@@ -105,6 +107,8 @@ Vec flatten(const EvalParams& p) {
     v[IDX_KO_EG]  = p.knightOutpostEg;
     for (int i = 0; i < SAFETY_DIM; ++i)
         v[OFF_KS + i] = p.kingDanger[i];
+    v[IDX_KSH_NEAR] = p.kingShieldNearMg;
+    v[IDX_KSH_FAR]  = p.kingShieldFarMg;
     return v;
 }
 
@@ -149,6 +153,27 @@ constexpr std::array<uint64_t, 64> buildPassedMask(bool white) {
 }
 constexpr std::array<uint64_t, 64> PASSED_MASK_W = buildPassedMask(true);
 constexpr std::array<uint64_t, 64> PASSED_MASK_B = buildPassedMask(false);
+
+// King pawn-shield masks (mirror of src/eval.cpp): the three files centred on the king
+// (clamped inboard), on the rank `dist` steps in front of it.
+constexpr std::array<uint64_t, 64> buildShieldMask(bool white, int dist) {
+    std::array<uint64_t, 64> t{};
+    for (int ks = 0; ks < 64; ++ks) {
+        const int kf = ks & 7, kr = ks >> 3;
+        const int center = std::clamp(kf, 1, 6);
+        const int rr     = white ? kr + dist : kr - dist;
+        if (rr < 0 || rr > 7) continue;
+        uint64_t m = 0;
+        for (int ff = center - 1; ff <= center + 1; ++ff)
+            m |= 1ULL << (rr * 8 + ff);
+        t[ks] = m;
+    }
+    return t;
+}
+constexpr std::array<uint64_t, 64> SHIELD_NEAR_W = buildShieldMask(true, 1);
+constexpr std::array<uint64_t, 64> SHIELD_FAR_W  = buildShieldMask(true, 2);
+constexpr std::array<uint64_t, 64> SHIELD_NEAR_B = buildShieldMask(false, 1);
+constexpr std::array<uint64_t, 64> SHIELD_FAR_B  = buildShieldMask(false, 2);
 
 // --- A training position as a sparse coefficient vector over theta. ---
 struct Sample {
@@ -318,6 +343,22 @@ Sample makeSample(const Board& board, double result) {
     };
     s.coef.emplace_back(OFF_KS + dangerIdx(Color::BLACK), mgF);
     s.coef.emplace_back(OFF_KS + dangerIdx(Color::WHITE), -mgF);
+
+    // King pawn shield (mg-only): friendly pawns on the near/far shelter bands in front
+    // of each king; White adds, Black subtracts, phase-folded by mgF.
+    for (int ci = 0; ci < 2; ++ci) {
+        const Color    c      = colors[ci];
+        const bool     white  = c == Color::WHITE;
+        const double   sgn    = white ? 1.0 : -1.0;
+        const uint64_t pawns  = board.pieces(PieceType::PAWN, c).getBits();
+        const int      ks     = board.kingSq(c).index();
+        const uint64_t nearBB = white ? SHIELD_NEAR_W[ks] : SHIELD_NEAR_B[ks];
+        const uint64_t farBB  = white ? SHIELD_FAR_W[ks] : SHIELD_FAR_B[ks];
+        const double   nNear  = std::popcount(pawns & nearBB);
+        const double   nFar   = std::popcount(pawns & farBB);
+        if (nNear != 0.0) s.coef.emplace_back(IDX_KSH_NEAR, sgn * nNear * mgF);
+        if (nFar != 0.0) s.coef.emplace_back(IDX_KSH_FAR, sgn * nFar * mgF);
+    }
     return s;
 }
 
@@ -525,6 +566,8 @@ void emitOther(const Vec& theta) {
     for (int i = 0; i < SAFETY_DIM; ++i)
         std::cout << std::lround(theta[OFF_KS + i]) << ",";
     std::cout << "};\n";
+    std::cout << "p.kingShieldNearMg = " << std::lround(theta[IDX_KSH_NEAR])
+              << "; p.kingShieldFarMg = " << std::lround(theta[IDX_KSH_FAR]) << ";\n";
 }
 
 } // namespace

@@ -133,6 +133,10 @@ constexpr EvalParams buildDefaultParams() {
     // index. Positive penalties; untuned starting point.
     for (int i = 0; i < SAFETY_DIM; ++i)
         p.kingDanger[i] = static_cast<int16_t>(std::min(i * i * 2, 480));
+    // King pawn-shield seed: a pawn directly in front shelters more than one further up.
+    // Midgame-only; untuned starting point.
+    p.kingShieldNearMg = 10;
+    p.kingShieldFarMg  = 4;
     return p;
 }
 
@@ -336,6 +340,42 @@ int kingDangerIndex(const Board& board, Color defender, Bitboard occ) {
     return count >= 2 ? std::min(weight, SAFETY_DIM - 1) : 0;
 }
 
+// King pawn-shield masks. For a king on square `ks`, the three files centred on the king
+// (clamped inboard so an edge king still spans three files), on the rank `dist` steps in
+// front of it toward the enemy (`dist` 1 = near, 2 = far). Empty when that rank is off the
+// board (king already on the far two ranks).
+constexpr std::array<uint64_t, 64> buildShieldMask(bool white, int dist) {
+    std::array<uint64_t, 64> t{};
+    for (int ks = 0; ks < 64; ++ks) {
+        const int kf = ks & 7, kr = ks >> 3;
+        const int center = std::clamp(kf, 1, 6);
+        const int rr     = white ? kr + dist : kr - dist;
+        if (rr < 0 || rr > 7) continue;
+        uint64_t m = 0;
+        for (int ff = center - 1; ff <= center + 1; ++ff)
+            m |= 1ULL << (rr * 8 + ff);
+        t[ks] = m;
+    }
+    return t;
+}
+constexpr std::array<uint64_t, 64> SHIELD_NEAR_W = buildShieldMask(true, 1);
+constexpr std::array<uint64_t, 64> SHIELD_FAR_W  = buildShieldMask(true, 2);
+constexpr std::array<uint64_t, 64> SHIELD_NEAR_B = buildShieldMask(false, 1);
+constexpr std::array<uint64_t, 64> SHIELD_FAR_B  = buildShieldMask(false, 2);
+
+// Accumulate one colour's king pawn-shield into `mg` (midgame-only), scaled by `sign`:
+// a per-band bonus for each friendly pawn on the near/far shelter ranks in front of the
+// king. Colour-symmetric via the mirrored masks.
+void addKingShield(const Board& board, const EvalParams& p, Color c, int sign, int& mg) {
+    const bool     white  = c == Color::WHITE;
+    const uint64_t pawns  = board.pieces(PieceType::PAWN, c).getBits();
+    const int      ks     = board.kingSq(c).index();
+    const uint64_t nearBB = white ? SHIELD_NEAR_W[ks] : SHIELD_NEAR_B[ks];
+    const uint64_t farBB  = white ? SHIELD_FAR_W[ks] : SHIELD_FAR_B[ks];
+    mg += sign * std::popcount(pawns & nearBB) * p.kingShieldNearMg;
+    mg += sign * std::popcount(pawns & farBB) * p.kingShieldFarMg;
+}
+
 } // namespace
 
 const EvalParams DEFAULT_EVAL_PARAMS = buildDefaultParams();
@@ -387,6 +427,10 @@ Value evaluate(const Board& board, const EvalParams& params, Value tempo) {
     // the danger to its own. Added to mg only, so the taper fades it out in the endgame.
     mg += params.kingDanger[kingDangerIndex(board, Color::BLACK, occ)] -
           params.kingDanger[kingDangerIndex(board, Color::WHITE, occ)];
+
+    // King pawn shield (midgame): reward each side's own pawns sheltering its king.
+    addKingShield(board, params, Color::WHITE, 1, mg);
+    addKingShield(board, params, Color::BLACK, -1, mg);
 
     // Early promotions can push the phase above the cap; clamp so the blend stays in
     // [eg, mg].
