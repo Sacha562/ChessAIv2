@@ -9,7 +9,7 @@ Phase 1c evaluation is a **tapered piece-square-table (PSQT) sum** with material
 folded in (a "PeSTO"-style eval), plus a **mobility** term, a **pawn-structure** term
 (isolated / doubled / passed), **piece terms** (bishop pair, rook on open/semi-open
 file, rook on the 7th, knight outpost), a **king-safety** term (attack-unit danger on
-the king zone plus a **pawn-shield** shelter bonus), and a caller-supplied tempo bonus.
+the king zone plus **pawn-shield / pawn-storm** shelter terms), and a caller-supplied tempo bonus.
 This completes the Phase 1c HCE feature set (see [PLAN.md](../PLAN.md) §17); NNUE is
 Phase 2.
 All weights are **Texel-tunable** — they live in a plain data block (`EvalParams`)
@@ -35,12 +35,12 @@ tuner ([tools/tune.cpp.md](../tools/tune.cpp.md)) is aimed at future *un-tuned* 
   (`PHASE_WEIGHT`, `PHASE_MAX`), the `PIECE_TYPES` index map, the mobility indices
   (`MOB_KNIGHT`…`MOB_QUEEN`), the pawn-structure masks (`FILE_BB`, `ADJ_FILES`,
   `PASSED_MASK_W`/`PASSED_MASK_B` and their builders), the king-safety
-  attacker weights (`KS_WEIGHT`), the king pawn-shield masks
-  (`SHIELD_NEAR_W`/`SHIELD_FAR_W`/`SHIELD_NEAR_B`/`SHIELD_FAR_B` and their
+  attacker weights (`KS_WEIGHT`), the king pawn-shield / pawn-storm masks
+  (`SHIELD_NEAR_*`/`SHIELD_FAR_*` and `STORM_NEAR_*`/`STORM_FAR_*`, all from
   `buildShieldMask`), the `buildDefaultParams` folder (folds material into
-  the deltas and seeds the mobility/pawn/piece/king-safety/shield tables), and the
-  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` / `addKingShield`
-  helpers all live in an anonymous namespace in
+  the deltas and seeds the mobility/pawn/piece/king-safety/shield/storm tables), and the
+  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` / `addKingShield` /
+  `addKingStorm` helpers all live in an anonymous namespace in
   `eval.cpp` — internal linkage, **not** public API. The tempo bonus is not a constant
   here: it is passed in as the `tempo` argument (a self-play knob held by
   [`Tunables`](search.hpp.md#struct-tunables)).
@@ -68,6 +68,7 @@ folded in.
 | `knightOutpostMg` / `knightOutpostEg` | `int16_t` | Bonus for a knight on the relative 4th–6th rank, pawn-defended, that no enemy pawn can attack. |
 | `kingDanger` | `std::array<int16_t, SAFETY_DIM>` | Midgame danger penalty indexed by the summed attack weight of enemy pieces on the king zone (≥ 2 attackers required); an S-curve of positive penalties. |
 | `kingShieldNearMg` / `kingShieldFarMg` | `int16_t` | Midgame-only bonus per friendly pawn sheltering the king, on the rank immediately in front (`Near`) / one rank beyond (`Far`), over the three files centred on the king. |
+| `kingStormNearMg` / `kingStormFarMg` | `int16_t` | Midgame-only penalty (≤ 0) per enemy pawn advancing on the king, two ranks in front (`Near`) / three ranks (`Far`), over the same three files. |
 
 - **Piece index (0..5):** `P, N, B, R, Q, K`, matching `PIECE_TYPES` in `eval.cpp`.
 - **Square orientation:** tables are stored in **White's a8-first view** (index 0 =
@@ -153,7 +154,14 @@ immediately ahead (`kingShieldNearMg`) and the next rank up (`kingShieldFarMg`).
 are compile-time masks (`SHIELD_NEAR_*`/`SHIELD_FAR_*`); the score is a popcount of
 friendly pawns in each band times its weight, added to `mg` only (shelter is a midgame
 concern), White positive and Black negative. Seeds `10`/`4` (near shelters more than far).
-Pawn **storm** (enemy pawns advancing on the king) is still TODO.
+
+**King pawn storm:** the mirror term (`addKingStorm`) charges a midgame penalty for *enemy*
+pawns advancing on the king over the same three files — a band two ranks in front
+(`kingStormNearMg`, bearing down on the shield) and three ranks in front (`kingStormFarMg`,
+still rolling in), reusing `buildShieldMask` at distance 2 and 3 (`STORM_NEAR_*`/`STORM_FAR_*`).
+A popcount of enemy pawns per band times its (negative) weight, `mg` only, charged to the
+defending side. Seeds `-8`/`-3`. Shield and storm read disjoint pawn sets (own vs enemy) on a
+square, so they never double-count. Blocked-storm damping is a possible later refinement.
 
 **Piece terms:** the **bishop pair** bonus (≥ 2 bishops); per rook, an **open-file**
 (no pawns of either colour) or **semi-open-file** (no friendly pawns) bonus and a

@@ -59,6 +59,12 @@ struct EvalParams {
     // on the rank immediately in front of the king, `Far` one rank beyond; pawns on both
     // are the ideal shelter. Positive bonuses, credited to the defending side.
     int16_t kingShieldNearMg{}, kingShieldFarMg{};
+
+    // King pawn storm (midgame-only penalty): enemy pawns advancing on the king across the
+    // same three files. `Near` is an enemy pawn two ranks in front of the king (bearing
+    // down on the shield), `Far` three ranks in front (still rolling in). Penalties (<= 0),
+    // charged to the defending side.
+    int16_t kingStormNearMg{}, kingStormFarMg{};
 };
 
 // PeSTO/Kaufman-seeded defaults, baked at namespace scope (see eval.cpp). The search

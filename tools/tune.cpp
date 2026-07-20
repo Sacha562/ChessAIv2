@@ -69,7 +69,9 @@ constexpr int IDX_KO_EG    = IDX_KO_MG + 1;
 constexpr int OFF_KS       = IDX_KO_EG + 1;       // 1022 king-safety danger table (mg-only)
 constexpr int IDX_KSH_NEAR = OFF_KS + SAFETY_DIM; // 1047 king shield, near band (mg-only)
 constexpr int IDX_KSH_FAR  = IDX_KSH_NEAR + 1;    // 1048 king shield, far band (mg-only)
-constexpr int NPARAMS      = IDX_KSH_FAR + 1;     // 1049
+constexpr int IDX_KST_NEAR = IDX_KSH_FAR + 1;     // 1049 king storm, near band (mg-only)
+constexpr int IDX_KST_FAR  = IDX_KST_NEAR + 1;    // 1050 king storm, far band (mg-only)
+constexpr int NPARAMS      = IDX_KST_FAR + 1;     // 1051
 
 using Vec = std::array<double, NPARAMS>;
 
@@ -109,6 +111,8 @@ Vec flatten(const EvalParams& p) {
         v[OFF_KS + i] = p.kingDanger[i];
     v[IDX_KSH_NEAR] = p.kingShieldNearMg;
     v[IDX_KSH_FAR]  = p.kingShieldFarMg;
+    v[IDX_KST_NEAR] = p.kingStormNearMg;
+    v[IDX_KST_FAR]  = p.kingStormFarMg;
     return v;
 }
 
@@ -174,6 +178,10 @@ constexpr std::array<uint64_t, 64> SHIELD_NEAR_W = buildShieldMask(true, 1);
 constexpr std::array<uint64_t, 64> SHIELD_FAR_W  = buildShieldMask(true, 2);
 constexpr std::array<uint64_t, 64> SHIELD_NEAR_B = buildShieldMask(false, 1);
 constexpr std::array<uint64_t, 64> SHIELD_FAR_B  = buildShieldMask(false, 2);
+constexpr std::array<uint64_t, 64> STORM_NEAR_W  = buildShieldMask(true, 2);
+constexpr std::array<uint64_t, 64> STORM_FAR_W   = buildShieldMask(true, 3);
+constexpr std::array<uint64_t, 64> STORM_NEAR_B  = buildShieldMask(false, 2);
+constexpr std::array<uint64_t, 64> STORM_FAR_B   = buildShieldMask(false, 3);
 
 // --- A training position as a sparse coefficient vector over theta. ---
 struct Sample {
@@ -358,6 +366,22 @@ Sample makeSample(const Board& board, double result) {
         const double   nFar   = std::popcount(pawns & farBB);
         if (nNear != 0.0) s.coef.emplace_back(IDX_KSH_NEAR, sgn * nNear * mgF);
         if (nFar != 0.0) s.coef.emplace_back(IDX_KSH_FAR, sgn * nFar * mgF);
+    }
+
+    // King pawn storm (mg-only): enemy pawns on the near/far storm bands in front of each
+    // king; White adds, Black subtracts, phase-folded by mgF.
+    for (int ci = 0; ci < 2; ++ci) {
+        const Color    c      = colors[ci];
+        const bool     white  = c == Color::WHITE;
+        const double   sgn    = white ? 1.0 : -1.0;
+        const uint64_t enemy  = board.pieces(PieceType::PAWN, ~c).getBits();
+        const int      ks     = board.kingSq(c).index();
+        const uint64_t nearBB = white ? STORM_NEAR_W[ks] : STORM_NEAR_B[ks];
+        const uint64_t farBB  = white ? STORM_FAR_W[ks] : STORM_FAR_B[ks];
+        const double   nNear  = std::popcount(enemy & nearBB);
+        const double   nFar   = std::popcount(enemy & farBB);
+        if (nNear != 0.0) s.coef.emplace_back(IDX_KST_NEAR, sgn * nNear * mgF);
+        if (nFar != 0.0) s.coef.emplace_back(IDX_KST_FAR, sgn * nFar * mgF);
     }
     return s;
 }
@@ -568,13 +592,16 @@ void emitOther(const Vec& theta) {
     std::cout << "};\n";
     std::cout << "p.kingShieldNearMg = " << std::lround(theta[IDX_KSH_NEAR])
               << "; p.kingShieldFarMg = " << std::lround(theta[IDX_KSH_FAR]) << ";\n";
+    std::cout << "p.kingStormNearMg = " << std::lround(theta[IDX_KST_NEAR])
+              << "; p.kingStormFarMg = " << std::lround(theta[IDX_KST_FAR]) << ";\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N]\n";
+        std::cerr << "usage: tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N] "
+                     "[--focus BEGIN END]\n";
         return 1;
     }
     const std::string dataset = argv[1];
@@ -582,16 +609,21 @@ int main(int argc, char** argv) {
     double            lr      = 2.0;
     double            fixedK  = -1.0;
     size_t            cap     = 0;
-    for (int i = 2; i < argc - 1; ++i) {
+    int               focusBegin = -1, focusEnd = -1; // tune only [BEGIN, END); -1 = all
+    for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--epochs")
+        if (a == "--epochs" && i + 1 < argc)
             epochs = std::stoi(argv[++i]);
-        else if (a == "--lr")
+        else if (a == "--lr" && i + 1 < argc)
             lr = std::stod(argv[++i]);
-        else if (a == "--k")
+        else if (a == "--k" && i + 1 < argc)
             fixedK = std::stod(argv[++i]);
-        else if (a == "--sample")
+        else if (a == "--sample" && i + 1 < argc)
             cap = static_cast<size_t>(std::stoll(argv[++i]));
+        else if (a == "--focus" && i + 2 < argc) {
+            focusBegin = std::stoi(argv[++i]);
+            focusEnd   = std::stoi(argv[++i]);
+        }
     }
 
     bool                faithful = true;
@@ -627,6 +659,15 @@ int main(int argc, char** argv) {
         support[i] = 0;
     for (int i = OFF_PSQT_EG + 5 * 64; i < OFF_PSQT_EG + 6 * 64; ++i)
         support[i] = 0;
+
+    // Optional --focus BEGIN END: freeze every parameter outside [BEGIN, END) so only that
+    // slice moves. Used to tune a newly added term in isolation (e.g. the king pawn
+    // shield/storm weights) without disturbing the other seeds -- interacting terms like the
+    // king-safety danger table must be held, or the isolated slice fits against a moving target.
+    if (focusBegin >= 0) {
+        for (int i = 0; i < NPARAMS; ++i)
+            if (i < focusBegin || i >= focusEnd) support[i] = 0;
+    }
 
     int frozen = 0;
     for (int i = 0; i < NPARAMS; ++i)

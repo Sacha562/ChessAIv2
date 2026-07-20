@@ -32,7 +32,7 @@ where `q` is the **White-relative** static eval of a position and
 The eval is a **phase-tapered linear function of its weights**, so it fits *all*
 [`EvalParams`](../src/eval.hpp.md#types) at once — the PSQT tables, the mobility
 tables, the pawn-structure terms, the piece terms, the king-safety danger table, and
-the king pawn-shield weights (`NPARAMS` = 1049). All weights are flattened
+the king pawn-shield / pawn-storm weights (`NPARAMS` = 1051). All weights are flattened
 into one vector `theta`, and each position is reduced to a **sparse coefficient
 vector** `c` with `q = dot(theta, c)`. The gradient is then exact and cheap, so the
 tuner uses **gradient descent (Adam)**, converging in seconds. Steps:
@@ -81,7 +81,7 @@ fit and/or deeper data — a later refinement.
 ## Usage
 
 ```
-tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N]
+tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N] [--focus BEGIN END]
 ```
 
 | Argument | Default | Meaning |
@@ -91,6 +91,7 @@ tuner <dataset> [--epochs N] [--lr F] [--k F] [--sample N]
 | `--lr F` | 2.0 | Adam learning rate, in centipawns. |
 | `--k F` | fit | Fix the sigmoid scale `K` instead of fitting it. |
 | `--sample N` | all | Use only the first `N` positions (0 = all). |
+| `--focus BEGIN END` | off | Freeze every parameter outside the flat-index range `[BEGIN, END)`, so only that slice moves. Used to tune a newly added term (e.g. the king pawn shield/storm weights at indices `1047..1051`) in isolation, holding interacting seeds fixed. |
 
 Progress (position count, fitted `K`, start/periodic loss) goes to stdout ahead of
 the table dump.
@@ -119,10 +120,10 @@ before committing — no eval change ships on the tuner's word alone.
   judgment, so tune on the engine's own self-play, not a GM/human database (the
   positions and outcomes are off-distribution). See [PLAN.md](../PLAN.md) §18.
 - **Models every current eval term** (PSQT + mobility + pawn structure + piece terms +
-  king-safety table + king pawn-shield) via the faithfulness-checked trace, but by policy
-  **actively tunes** only the non-king piece PSQTs, the isolated/doubled terms, the piece
-  terms, the king-safety table, and the king pawn-shield weights; the king PSQT, mobility,
-  and passed-pawn tables are frozen (see
+  king-safety table + king pawn-shield + king pawn-storm) via the faithfulness-checked trace,
+  but by policy **actively tunes** only the non-king piece PSQTs, the isolated/doubled terms,
+  the piece terms, the king-safety table, and the king pawn-shield / pawn-storm weights; the
+  king PSQT, mobility, and passed-pawn tables are frozen (see
   [Overfit control](#overfit-control-why-a-naive-tune-regresses)). When a **new** eval
   term is added (e.g. king safety), `makeSample` and the parameter layout must be
   extended to include it — the load-time faithfulness check is the tripwire: it fails

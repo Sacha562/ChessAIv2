@@ -137,6 +137,10 @@ constexpr EvalParams buildDefaultParams() {
     // Midgame-only; untuned starting point.
     p.kingShieldNearMg = 10;
     p.kingShieldFarMg  = 4;
+    // King pawn-storm seed: a nearer enemy pawn threatens more. Midgame-only penalties;
+    // untuned starting point.
+    p.kingStormNearMg = -8;
+    p.kingStormFarMg  = -3;
     return p;
 }
 
@@ -376,6 +380,27 @@ void addKingShield(const Board& board, const EvalParams& p, Color c, int sign, i
     mg += sign * std::popcount(pawns & farBB) * p.kingShieldFarMg;
 }
 
+// King pawn-storm masks: the same three king files, but the bands enemy pawns roll in on —
+// two ranks (`STORM_NEAR`) and three ranks (`STORM_FAR`) in front of the king. Reuse the
+// shield-mask builder at `dist` 2 and 3.
+constexpr std::array<uint64_t, 64> STORM_NEAR_W = buildShieldMask(true, 2);
+constexpr std::array<uint64_t, 64> STORM_FAR_W  = buildShieldMask(true, 3);
+constexpr std::array<uint64_t, 64> STORM_NEAR_B = buildShieldMask(false, 2);
+constexpr std::array<uint64_t, 64> STORM_FAR_B  = buildShieldMask(false, 3);
+
+// Accumulate one colour's king pawn-storm into `mg` (midgame-only), scaled by `sign`: a
+// per-band penalty for each *enemy* pawn on the near/far storm ranks in front of the king.
+// Colour-symmetric via the mirrored masks.
+void addKingStorm(const Board& board, const EvalParams& p, Color c, int sign, int& mg) {
+    const bool     white  = c == Color::WHITE;
+    const uint64_t enemy  = board.pieces(PieceType::PAWN, ~c).getBits();
+    const int      ks     = board.kingSq(c).index();
+    const uint64_t nearBB = white ? STORM_NEAR_W[ks] : STORM_NEAR_B[ks];
+    const uint64_t farBB  = white ? STORM_FAR_W[ks] : STORM_FAR_B[ks];
+    mg += sign * std::popcount(enemy & nearBB) * p.kingStormNearMg;
+    mg += sign * std::popcount(enemy & farBB) * p.kingStormFarMg;
+}
+
 } // namespace
 
 const EvalParams DEFAULT_EVAL_PARAMS = buildDefaultParams();
@@ -431,6 +456,10 @@ Value evaluate(const Board& board, const EvalParams& params, Value tempo) {
     // King pawn shield (midgame): reward each side's own pawns sheltering its king.
     addKingShield(board, params, Color::WHITE, 1, mg);
     addKingShield(board, params, Color::BLACK, -1, mg);
+
+    // King pawn storm (midgame): penalize each side for enemy pawns advancing on its king.
+    addKingStorm(board, params, Color::WHITE, 1, mg);
+    addKingStorm(board, params, Color::BLACK, -1, mg);
 
     // Early promotions can push the phase above the cap; clamp so the blend stays in
     // [eg, mg].
