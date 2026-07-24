@@ -21,6 +21,13 @@ added the selective-search layers on top (see [PLAN.md](../PLAN.md) Parts 3–4)
   **check extensions**, and **aspiration windows** ([`aspirationSearch`](#searcheraspirationsearch))
   at the root.
 
+**Phase 1c** adds two more selective layers, each behind its own toggle:
+**continuation history** (a quiet-ordering signal conditioned on the moves 1 and 2 plies
+back — held in [`History`](history.hpp.md), fed by a new per-ply search stack in
+[`search`](#searchersearch)) and **singular extensions** (a reduced-depth verification
+search that excludes the TT move; if every alternative fails low the TT move is extended,
+via a new `excluded`-move parameter on [`search`](#searchersearch)).
+
 Each selective layer is behind a [`Tunables`](#struct-tunables) toggle so it can be
 individually A/B-isolated — the discipline that caught step-1's history/IIR regressions.
 Everything above still sits on the fail-soft **Principal Variation Search** negamax with
@@ -37,7 +44,9 @@ a [transposition table](tt.hpp.md).
 - `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the **structural**
   selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
   `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
-  `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH` — plus the helpers `lmpCount`
+  `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH`, `SINGULAR_TT_DEPTH_MARGIN`
+  (how much shallower than the node the TT entry may be to seed a singular verification) —
+  plus the helpers `lmpCount`
   and `hasNonPawnMaterial` live in an anonymous namespace in `search.cpp` (internal
   linkage). The **pruning margins** that used to be `constexpr` (`NMP_BASE`,
   `NMP_EVAL_DIV`, `RFP_MARGIN`, `FUT_MARGIN` / `FUT_BASE`, the LMR base/divisor, the LMP
@@ -86,6 +95,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
 | `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
 | `useCountermove` | `bool` | `true` | Enable the countermove ordering signal (`UseCountermove`). |
+| `useContHist` | `bool` | `true` | Enable continuation history (Phase 1c) (`UseContHist`). **Default on**: A/B-neutral at the material-only eval (−19 ± 24 Elo, 436 games) but +7 ± 8 Elo (51.0%, 3264 games) once the full HCE eval landed — its value scales with eval sophistication. |
 | `useIir` | `bool` | `true` | Enable Internal Iterative Reduction (`UseIIR`). |
 | `useNmp` | `bool` | `true` | Enable null-move pruning (`UseNMP`). |
 | `useRfp` | `bool` | `true` | Enable reverse futility / static null-move pruning (`UseRFP`). |
@@ -93,34 +103,56 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useLmp` | `bool` | `true` | Enable late-move (move-count) pruning (`UseLMP`). |
 | `useLmr` | `bool` | `true` | Enable late move reductions (`UseLMR`). |
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
+| `useSingular` | `bool` | `true` | Enable singular extensions (Phase 1c) (`UseSingular`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
-| `lmrBase` | `int` | `70` | LMR reduction offset ×100 (`LmrBase`); `0.70` in the curve. |
-| `lmrDivisor` | `int` | `208` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `2.08` in the curve (kept ≥ 1). |
+| `lmrBase` | `int` | `68` | LMR reduction offset ×100 (`LmrBase`); `0.68` in the curve. |
+| `lmrDivisor` | `int` | `162` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.62` in the curve (kept ≥ 1). |
 | `nmpBase` | `int` | `1` | Null-move base reduction `R` (`NmpBase`). |
-| `nmpEvalDiv` | `int` | `177` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `nmpEvalDiv` | `int` | `176` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
 | `rfpMargin` | `Value` | `68` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
-| `futMargin` | `Value` | `105` | Futility margin per remaining ply, cp (`FutMargin`). |
-| `futBase` | `Value` | `94` | Futility base margin, cp (`FutBase`). |
-| `lmpBase` | `int` | `1` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+| `futMargin` | `Value` | `86` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `77` | Futility base margin, cp (`FutBase`). |
+| `lmpBase` | `int` | `4` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+| `singularMinDepth` | `int` | `7` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
+| `singularMargin` | `int` | `1` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
+| `singularDoubleMargin` | `int` | `46` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
 
-The **forward-pruning margins** (`lmrBase` … `lmpBase`) are exposed as UCI options (not
-`constexpr`) so **SPSA** self-play can tune them without a rebuild. The defaults above are
-**SPSA-tuned** (OpenBench, 96k games @ STC): the tuned set beat the first-cut values by
-**+82 ± 20 Elo** (SPRT accepted). `NmpBase` and `LmpBase` sit at their tuning floor of 1.
+The **forward-pruning margins** (`lmrBase` … `lmpBase`) and the **singular knobs**
+(`singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are exposed as UCI options
+(not `constexpr`) so **SPSA** self-play can tune them without a rebuild. They were first
+SPSA-tuned at the end of Phase 1b on the material-only eval (**+82 ± 20 Elo**), then
+**re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the singular knobs,
+96k games @ STC 10+0.1) — the re-tuned set above beat the Phase 1b defaults by **+26.2 ± 10
+Elo** (SPRT accepted @ LTC 40+0.4). The `NmpBase` / `LmpBase` tuning floor was relaxed from
+1 to 0 for that re-tune; `LmpBase` then settled at `4` and `NmpBase` stayed at `1`.
 Only the margins are tunable; the structural gates (min depths, `LMR_MIN_MOVES`, etc.) stay
 `constexpr`. `lmrBase` / `lmrDivisor` are integer-scaled ×100 because the tuner works in
 integers; they are divided when the LMR table is (re)built
 ([`buildReductions`](#searcherbuildreductions)).
 
-The `use*` toggles exist to **A/B-isolate** each Phase 1b signal's Elo (flip one on/off,
-run an SPRT). `useKillers` / `useHistory` / `useCountermove` are applied via
-[`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top of
+The `use*` toggles exist to **A/B-isolate** each selective signal's Elo (flip one on/off,
+run an SPRT). `useKillers` / `useHistory` / `useCountermove` / `useContHist` are applied
+via [`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top of
 [`think`](#searcherthink)); `useIir` / `useNmp` / `useRfp` / `useFutility` / `useLmp` /
-`useLmr` / `useCheckExt` each gate their step inside [`search`](#searchersearch); and
-`useAspiration` / `aspirationDelta` drive
+`useLmr` / `useCheckExt` / `useSingular` each gate their step inside
+[`search`](#searchersearch); and `useAspiration` / `aspirationDelta` drive
 [`aspirationSearch`](#searcheraspirationsearch). With every selective toggle off the
 search reproduces the plain PVS + step-1-ordering engine.
+
+The **Phase 1c knobs** (`useContHist`, and the singular set `useSingular` /
+`singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are new this phase; the
+singular margins are exposed as UCI options so SPSA can tune them, while
+`SINGULAR_TT_DEPTH_MARGIN` and the `(depth − 1) / 2` verification depth stay `constexpr`.
+
+**Default rationale (A/B vs release 0.1b @ STC 10+0.1, UHO book).** Isolated:
+**singular extensions +24 Elo** (`UseSingular` alone, `UseContHist` off — a gainer, so
+**default on**); **continuation history −19 ± 24 Elo** at the material-only eval, which
+**flipped to +7 ± 8 Elo** (51.0%, 3264 games) once the full HCE eval landed, so it is now
+**default on**. This is [`History`](history.hpp.md)'s butterfly/IIR pattern again — those
+signals were negative in isolation pre-pruning (−23 / −36) and flipped to large wins
+(+247 / +16) once the rest of the stack existed to consume them: an ordering refinement's
+Elo depends on how much positional structure the eval exposes.
 
 **Default rationale (A/B @ 8+0.08 vs the same binary):** all four are **on**. Killers
 **+44 Elo** and countermove **~0**. Butterfly **history** and **IIR** both *inverted*
@@ -147,9 +179,10 @@ just want the defaults).
 | `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
-| `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly history, countermoves) for this search. |
+| `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves) for this search. |
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
+| `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion; read as `[ply-1]` / `[ply-2]` to build a node's continuation context. |
 | `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
 | `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
 | `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
@@ -217,11 +250,15 @@ full Phase 1b selective-search stack (returns `best`). Order of operations:
 2. **TT probe** (cutoff only off the PV) → **static eval** (reused from the TT when
    present; skipped in check) → **`improving`** trend;
 3. **whole-node pruning** (off-PV, not in check, away from mate): **RFP** then **NMP**;
-4. **IIR** (gated, default off) → movegen → **[`orderMoves`](movepick.hpp.md#ordermoves)**;
-5. **move loop**: per-move quiet pruning (**LMP**, **futility**) → make → **check
-   extension** → **LMR** reduction → **PVS** search/re-search → cutoff bookkeeping
-   (quiet-cutoff [`history`](history.hpp.md#historyupdatequietcutoff) updates);
-6. **TT store** (value, best move, bound, and the static eval).
+4. **IIR** (gated) → movegen → resolve the **continuation context** (the moves 1/2 plies
+   back, from the search stack) → **[`orderMoves`](movepick.hpp.md#ordermoves)**;
+5. **move loop**: per-move quiet pruning (**LMP**, **futility**) → **singular extension**
+   (TT move only, pre-make) → record the search-stack move → make → **check extension** →
+   **LMR** reduction → **PVS** search/re-search → cutoff bookkeeping (quiet-cutoff
+   [`history`](history.hpp.md#historyupdatequietcutoff) updates, including continuation
+   history);
+6. **TT store** (value, best move, bound, and the static eval) — **skipped** during a
+   singular-verification search (`excluded` set).
 
 `pvNode` is derived as `beta - alpha > 1`: the root and full-window nodes are PV; the
 null-window scout nodes are not. Every forward-pruning / reduction step is restricted to
@@ -248,9 +285,18 @@ searched exactly.
   the horizon cannot reach alpha and is skipped.
 - **Late-move pruning (LMP)** — past a depth-scaled quiet count (`lmpCount`, smaller when
   not `improving`) the remaining quiets are skipped.
+- **Singular extension** — for the **TT move only**, decided *before* it is made. When
+  the TT entry is a deep enough lower bound (`tt.depth >= depth − SINGULAR_TT_DEPTH_MARGIN`,
+  bound `LOWER`/`EXACT`, `depth >= singularMinDepth`, not a mate score, not already inside
+  a verification search), a reduced-depth search at `(depth − 1) / 2` that **excludes** the
+  TT move is run against a lowered beta `singularBeta = ttValue − singularMargin·depth`. If
+  every alternative fails below `singularBeta` the TT move is *singular* and extended by 1
+  ply (by **2** off the PV when they fail more than `singularDoubleMargin` under); if it is
+  not singular yet the TT score already beats beta, it is reduced by 1 (a multi-cut-style
+  negative extension). The exclusion is threaded via the `excluded` parameter (below).
 - **Check extension** — a move that gives check is searched one ply deeper
-  (`ext = 1`), bounded by `ply + 1 < MAX_PLY - 1` so `ply` can never overrun the per-ply
-  tables.
+  (`checkExt = 1`), bounded by `ply + 1 < MAX_PLY - 1` so `ply` can never overrun the
+  per-ply tables. The two extensions add: `newDepth = depth − 1 + singularExt + checkExt`.
 - **Late move reductions (LMR)** — late quiet, non-checking moves are searched at
   `newDepth - reduction`, where `reduction` comes from the `ln(depth)·ln(moveCount)`
   table, reduced by one on the PV and one when `improving`, clamped to keep the reduced
@@ -270,11 +316,21 @@ one ply before movegen; the cheaper search leaves a TT move behind that a later
 re-visit (or the same iterative-deepening line one ply up) can order on. The reduced
 depth is also what is stored in the TT, correctly reflecting the work actually done.
 
+**Continuation history:** the node reads its **search stack** (`contPiece_` / `contTo_`)
+to build a [`ContHistContext`](history.hpp.md#struct-conthistcontext) — the `(piece, to)`
+of the moves 1 and 2 plies back — which is passed to `orderMoves` (so a quiet's ordering
+score folds in [`continuationScore`](history.hpp.md#historycontinuationscore)) and to
+`updateQuietCutoff`. Each move records `contPiece_[ply]` / `contTo_[ply]` just before
+recursing (a null move records `-1`), so a child reads `[ply-1]` and a grandchild
+`[ply-2]`. The context is empty at the root, after a null move, or before enough plies
+exist.
+
 **Quiet-cutoff learning:** on a fail-high (`alpha >= beta`) caused by a **quiet** move,
 [`history_.updateQuietCutoff`](history.hpp.md#historyupdatequietcutoff) rewards that move,
 penalises the quiet moves tried before it (tracked in a per-node `quietsTried` stack
-array), and updates killers and the countermove for `prevMove`. Capture cutoffs do not
-touch history. These signals feed the next node's `orderMoves`.
+array), and updates killers, the countermove for `prevMove`, and the continuation history
+for the node's context. Capture cutoffs do not touch history. These signals feed the next
+node's `orderMoves`.
 
 **Principal Variation Search (PVS):** the first (best-ordered) move is searched on the
 full `[alpha, beta]` window to establish the principal variation. Every later move is
@@ -304,29 +360,36 @@ an alpha-raising move, so the reported score stays exact and deterministic.
 | `beta` | `Value` | Upper bound of the search window. |
 | `ply` | `int` | Distance from the root (for mate scoring and root-move tracking). |
 | `prevMove` | `Move` | The move played at the parent node (`Move::NO_MOVE` at the root); keys the countermove and is the malus/history side-to-move context. |
+| `excluded` | `Move` | Move to skip in this node's move loop (defaults to `NO_MOVE`). Set only by a **singular-verification** call — the same node/position searched with the TT move excluded; while set, the TT cutoff and the TT store are both suppressed and singular extensions are not re-attempted. |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — the negamax score of
 `board`. `mated_in(ply)` at checkmate, `VALUE_DRAW` at stalemate/draw, `VALUE_ZERO`
-when aborting (`timeUp_`).
+when aborting (`timeUp_`). A singular-verification call (with `excluded` set) returns the
+best score among the *alternatives* to the TT move (`-VALUE_INFINITE` if the TT move is the
+only legal move, which the caller reads as "singular").
 
 **Transposition table use:**
 - **Probe** at [`board.hash()`](../include/chess.hpp). A hit yields the stored move
-  (used for ordering) and its cached static eval, and — **at a non-PV node** with
-  `entry.depth >= depth` and a low fifty-move clock (`halfMoveClock() <
-  TT_CUTOFF_MAX_HALFMOVE`, 90) — an immediate cutoff if the bound qualifies: `EXACT` always, `LOWER` when `ttv >= beta`,
+  (used for ordering) and its cached static eval, and — **at a non-PV node** (and **not**
+  inside a singular-verification search) with `entry.depth >= depth` and a low fifty-move
+  clock (`halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE`, 90) — an immediate cutoff if the bound
+  qualifies: `EXACT` always, `LOWER` when `ttv >= beta`,
   `UPPER` when `ttv <= alpha`, where `ttv = valueFromTT(entry.value, ply)`. The
   `!pvNode` guard means the root (and every PV node) **never cuts**, so a move is always
-  produced and the PV stays exact.
+  produced and the PV stays exact. The verification search must **not** cut here (that
+  would just return the excluded move's own score), hence the extra guard.
 - **Ordering**: the probed TT move is passed to
   [`orderMoves`](movepick.hpp.md#ordermoves) together with [`history_`](history.hpp.md),
   the `ply`, and `prevMove`, which floats the TT move first and then sorts the rest
   (good captures by SEE+MVV-LVA, killers, countermove, history-scored quiets, losing
   captures).
-- **Store** after the loop (unless aborted): `depth`, `valueToTT(best, ply)`, the node's
-  **static eval** (`VALUE_NONE` when in check), the best move, and the bound — `LOWER` if
-  `best >= beta`, `EXACT` if `best > alphaOrig`, else `UPPER`. `alphaOrig` is captured
-  before the loop mutates `alpha`. The stored eval is what a later probe reuses instead
-  of recomputing [`evaluate`](eval.hpp.md#evaluate).
+- **Store** after the loop (unless aborted, **and unless `excluded` is set**): `depth`,
+  `valueToTT(best, ply)`, the node's **static eval** (`VALUE_NONE` when in check), the best
+  move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`, else
+  `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`. The stored eval is what
+  a later probe reuses instead of recomputing [`evaluate`](eval.hpp.md#evaluate). A
+  singular-verification result is the value of a **restricted** move set, so it is not
+  stored under this position's key.
 - **Prefetch**: `tt_.prefetch(board.zobristAfter(m))` before each `makeMove`.
 
 **Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`,

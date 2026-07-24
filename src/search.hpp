@@ -52,7 +52,11 @@ struct Tunables {
     bool useKillers     = true;
     bool useHistory     = true;
     bool useCountermove = true;
-    bool useIir         = true;
+    bool useContHist    = true; // continuation history (Phase 1c). Its Elo scales with eval
+                                // sophistication: A/B-neutral at the material-only eval
+                                // (-19 +/- 24 Elo, 436g) but +7 +/- 8 Elo (51.0%, 3264g) once
+                                // the full HCE eval landed -- so default ON. UCI: UseContHist.
+    bool useIir = true;
 
     // Phase 1b pruning / reduction / extension toggles (each individually ablatable).
     bool useNmp        = true; // null-move pruning
@@ -61,6 +65,7 @@ struct Tunables {
     bool useLmp        = true; // late-move (move-count) pruning
     bool useLmr        = true; // late move reductions
     bool useCheckExt   = true; // check extensions
+    bool useSingular   = true; // singular extensions (Phase 1c)
     bool useAspiration = true; // aspiration windows at the root
 
     // Aspiration: initial half-window (cp) around the previous iteration's score.
@@ -70,14 +75,21 @@ struct Tunables {
     // divisor are stored x100 (integer knobs for the tuner) and divided when the LMR
     // reduction table is built. Structural gates (min depths, move counts) stay
     // constexpr in search.cpp.
-    int   lmrBase    = 70;  // LMR reduction offset, x100 (0.70)
-    int   lmrDivisor = 208; // LMR ln*ln divisor,  x100 (2.08); must stay >= 1
+    int   lmrBase    = 68;  // LMR reduction offset, x100 (0.68)
+    int   lmrDivisor = 162; // LMR ln*ln divisor,  x100 (1.62); must stay >= 1
     int   nmpBase    = 1;   // null-move base reduction R
-    int   nmpEvalDiv = 177; // null-move eval-margin divisor (cp of eval over beta per +1 R)
+    int   nmpEvalDiv = 176; // null-move eval-margin divisor (cp of eval over beta per +1 R)
     Value rfpMargin  = 68;  // reverse-futility margin per remaining ply (cp)
-    Value futMargin  = 105; // futility margin per remaining ply (cp)
-    Value futBase    = 94;  // futility base margin (cp)
-    int   lmpBase    = 1;   // late-move-pruning quiet-count base (count = base + depth^2)
+    Value futMargin  = 86;  // futility margin per remaining ply (cp)
+    Value futBase    = 77;  // futility base margin (cp)
+    int   lmpBase    = 4;   // late-move-pruning quiet-count base (count = base + depth^2)
+
+    // Singular-extension knobs (Phase 1c). The TT move is verified singular by a
+    // reduced-depth search (excluding it) against a lowered beta; if every alternative
+    // fails below that beta, the TT move is extended.
+    int singularMinDepth     = 7;  // only attempt at/above this depth (TT must be this deep)
+    int singularMargin       = 1;  // singularBeta = ttValue - singularMargin * depth (cp/ply)
+    int singularDoubleMargin = 46; // extra ply when the verification fails this far under (cp)
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
@@ -99,7 +111,8 @@ public:
     uint64_t nodes() const { return nodes_; }
 
 private:
-    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove);
+    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
+                   Move excluded = Move(Move::NO_MOVE));
     Value   aspirationSearch(Board& board, int depth, Value prevScore);
     Value   qsearch(Board& board, Value alpha, Value beta, int ply);
     void    setupTiming(const Limits& limits, const Board& board);
@@ -120,6 +133,12 @@ private:
     History             history_;                // quiet-move ordering heuristics (per search)
     Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
     uint8_t reductions_[LMR_DIM][LMR_DIM]{};     // LMR reduction table (see buildReductions)
+
+    // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
+    // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds
+    // continuation history the moves 1 and 2 plies back. Written just before recursing.
+    int contPiece_[MAX_PLY]{};
+    int contTo_[MAX_PLY]{};
 
     std::chrono::steady_clock::time_point start_{};
     int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)

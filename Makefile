@@ -28,8 +28,10 @@ else
 endif
 EXE ?= chessai$(SUFFIX)
 TESTEXE ?= chessai-tests$(SUFFIX)
+TUNEREXE ?= tuner$(SUFFIX)
+EXTRACTEXE ?= extract$(SUFFIX)
 
-.PHONY: all test clean
+.PHONY: all test tuner extract clean
 all:
 	$(CXX) $(CXXSTD) $(OPT) $(DEFS) $(WARN) $(INCLUDE) $(SOURCES) -pthread -o $(EXE)
 
@@ -38,5 +40,13 @@ test:
 	$(CXX) $(CXXSTD) $(TESTOPT) $(DEFS) $(TESTWARN) $(INCLUDE) $(TESTSOURCES) -pthread -o $(TESTEXE)
 	./$(TESTEXE)
 
+# Offline Texel eval tuner (tools/tune.cpp). Links only the eval, not the search.
+tuner:
+	$(CXX) $(CXXSTD) $(OPT) $(DEFS) $(WARN) $(INCLUDE) tools/tune.cpp src/eval.cpp -o $(TUNEREXE)
+
+# PGN -> labeled-FEN extractor for tuning data (tools/extract.cpp). Header-only.
+extract:
+	$(CXX) $(CXXSTD) $(OPT) $(DEFS) $(WARN) $(INCLUDE) tools/extract.cpp -o $(EXTRACTEXE)
+
 clean:
-	-rm -f chessai chessai.exe chessai-tests chessai-tests.exe
+	-rm -f chessai chessai.exe chessai-tests chessai-tests.exe tuner tuner.exe extract extract.exe

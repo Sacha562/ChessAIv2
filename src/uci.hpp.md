@@ -45,7 +45,7 @@ and run by [`run_uci`](#run_uci).
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
-| `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`, ordering toggles `UseKillers` / `UseHistory` / `UseCountermove` / `UseIIR`), copied into each [`Searcher`](search.hpp.md#class-searcher). |
+| `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`, ordering toggles `UseKillers` / `UseHistory` / `UseCountermove` / `UseContHist` / `UseIIR`, the pruning/extension toggles, and the Phase 1c singular knobs), copied into each [`Searcher`](search.hpp.md#class-searcher). |
 
 ## Functions
 
@@ -85,19 +85,29 @@ reading input.
 Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or a
 field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
-and `EndgamePieces`, plus the Phase 1b selective-search toggles (`spin`, `0`/`1`) used to
-A/B-isolate each signal's Elo: the step-1 ordering signals `UseKillers`, `UseHistory`,
+and `EndgamePieces`, plus the selective-search toggles (`spin`, `0`/`1`) used to
+A/B-isolate each signal's Elo: the ordering signals `UseKillers`, `UseHistory`,
 `UseCountermove`, `UseIIR` (all default `1` — history and IIR both inverted from step-1
 losses to wins once LMP/LMR existed to consume them: history −23 → +247, IIR −36 → +16),
-and the pruning /
+`UseContHist` (Phase 1c continuation history, **default `1`** — A/B-neutral at the
+material-only eval but +7 ± 8 Elo once the full HCE eval landed), and the pruning /
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
-`UseCheckExt`, `UseAspiration` (all default `1`) with `AspirationDelta` (`spin`, default
-`15`, the initial aspiration half-window in cp), plus the **SPSA-tunable forward-pruning
+`UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
+`1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `15`, the initial aspiration half-window in
+cp), plus the **SPSA-tunable forward-pruning
 margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
-`NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase` — exposed as `spin`
-options so a self-play tuner can perturb them without a rebuild. Their advertised defaults
-are the **SPSA-tuned** values (OpenBench, 96k games; the tuned set beat the first-cut
-constants by **+82 ± 20 Elo**, SPRT accepted). Each is advertised in the `uci` reply as
+`NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, and the **Phase 1c
+singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin` — all exposed
+as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
+the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eval, **+82 ±
+20 Elo**), then **re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the
+singular knobs, 96k games @ STC), which beat the Phase 1b defaults by **+26.2 ± 10 Elo**
+(SPRT accepted @ LTC 40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
+**railed at the old floor of `1`** in the Phase 1b tune, so the floor was relaxed to `0` for
+the re-tune — which then settled `LmpBase` at `4` and kept `NmpBase` at `1` (neither wanted
+below 1). `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
+term dominates at `depth ≥ NMP_MIN_DEPTH`); `LmpBase 0` is a pure `depth²` quiet count, and
+move 1 is never pruned (`moveCount > 1` guard). Each is advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
 **clamped to its advertised `min`/`max`** on store so an out-of-range value (e.g. a raw
 spin from a tuner) can never reach the search as an out-of-bounds int. The advertised `default`

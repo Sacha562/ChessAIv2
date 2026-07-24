@@ -2,12 +2,23 @@
 
 Static position evaluation. Given a board, it returns a single centipawn
 [`Value`](types.hpp.md#using-value--int) from the side-to-move's perspective, used
-by [search](search.hpp.md) at leaf nodes (`depth <= 0`). This is a search **hot
-path** — `evaluate` is called once per leaf, so it must stay cheap.
+by [search](search.hpp.md) at leaf nodes. This is a search **hot path** — `evaluate`
+is called once per quiescence leaf, so it must stay cheap.
 
-Phase 0 is material-only (plus a caller-supplied tempo bonus). PSQT, tapered eval,
-pawn structure, mobility, and king safety arrive in Phase 1c (see
-[PLAN.md](../PLAN.md) §17); NNUE in Phase 2.
+Phase 1c evaluation is a **tapered piece-square-table (PSQT) sum** with material
+folded in (a "PeSTO"-style eval), plus a **mobility** term, a **pawn-structure** term
+(isolated / doubled / passed), **piece terms** (bishop pair, rook on open/semi-open
+file, rook on the 7th, knight outpost), a **king-safety** term (attack-unit danger on
+the king zone plus **pawn-shield / pawn-storm** shelter terms), and a caller-supplied tempo bonus.
+This completes the Phase 1c HCE feature set (see [PLAN.md](../PLAN.md) §17); NNUE is
+Phase 2.
+All weights are **Texel-tunable** — they live in a plain data block (`EvalParams`)
+rather than hard-coded constants. Current defaults are **seeds**: PeSTO PSQTs
+(already expertly tuned, kept as-is), a mobility ramp (SPRT-confirmed +58), and
+pawn-structure seeds. A self-play Texel tune of the PSQT *regressed* (re-fitting
+already-strong PeSTO on ~2000-Elo self-play moves it toward weaker play), so the
+tuner ([tools/tune.cpp.md](../tools/tune.cpp.md)) is aimed at future *un-tuned* terms
+(king safety, piece terms) rather than PeSTO.
 
 ## Source Files
 
@@ -16,37 +27,166 @@ pawn structure, mobility, and king safety arrive in Phase 1c (see
 
 ## Namespace
 
-- Public API declared in namespace `engine`.
-- Piece values (`V_PAWN` … `V_QUEEN`) and the `diff` helper live in an anonymous
-  namespace in `eval.cpp` — internal linkage, **not** public API. The tempo bonus is
-  no longer a constant here: it is passed in as the `tempo` argument (a self-play
-  knob held by [`Tunables`](search.hpp.md#struct-tunables)).
+- Public API declared in namespace `engine`: the `EvalParams` struct, the
+  `DEFAULT_EVAL_PARAMS` table, and the two `evaluate` overloads.
+- The seed data — material (`MG_VALUE`/`EG_VALUE`), the twelve `MG_*`/`EG_*` PeSTO
+  positional deltas and their `MG_DELTA`/`EG_DELTA` aggregates, the mobility ramp
+  (`MOB_CENTER`/`MOB_MG_SLOPE`/`MOB_EG_SLOPE`/`MOB_MAX`) — plus the phase weights
+  (`PHASE_WEIGHT`, `PHASE_MAX`), the `PIECE_TYPES` index map, the mobility indices
+  (`MOB_KNIGHT`…`MOB_QUEEN`), the pawn-structure masks (`FILE_BB`, `ADJ_FILES`,
+  `PASSED_MASK_W`/`PASSED_MASK_B` and their builders), the king-safety
+  attacker weights (`KS_WEIGHT`), the king pawn-shield / pawn-storm masks
+  (`SHIELD_NEAR_*`/`SHIELD_FAR_*` and `STORM_NEAR_*`/`STORM_FAR_*`, all from
+  `buildShieldMask`), the `buildDefaultParams` folder (folds material into
+  the deltas and seeds the mobility/pawn/piece/king-safety/shield/storm tables), and the
+  `addMobility` / `addPawnStructure` / `addPieceTerms` / `kingDangerIndex` / `addKingShield` /
+  `addKingStorm` helpers all live in an anonymous namespace in
+  `eval.cpp` — internal linkage, **not** public API. The tempo bonus is not a constant
+  here: it is passed in as the `tempo` argument (a self-play knob held by
+  [`Tunables`](search.hpp.md#struct-tunables)).
+
+## Types
+
+### `struct EvalParams`
+
+The tunable weight block: combined midgame/endgame piece-square tables with material
+folded in.
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `mg` | `std::array<std::array<int16_t, 64>, 6>` | Midgame value of a `(piece type, square)`, in centipawns. |
+| `eg` | `std::array<std::array<int16_t, 64>, 6>` | Endgame value of the same. |
+| `mobMg` | `std::array<std::array<int16_t, 28>, 4>` | Midgame mobility bonus indexed by `(piece, safe-square count)`; piece 0=knight, 1=bishop, 2=rook, 3=queen. |
+| `mobEg` | `std::array<std::array<int16_t, 28>, 4>` | Endgame mobility bonus, same indexing. |
+| `passedMg` / `passedEg` | `std::array<int16_t, 8>` | Passed-pawn bonus by rank relative to the pawn's own side (0 = own back rank, 7 = promotion; both ends unused). |
+| `isolatedMg` / `isolatedEg` | `int16_t` | Penalty (≤ 0) per pawn with no friendly pawn on an adjacent file. |
+| `doubledMg` / `doubledEg` | `int16_t` | Penalty (≤ 0) per extra pawn sharing a file. |
+| `bishopPairMg` / `bishopPairEg` | `int16_t` | Bonus for holding both bishops. |
+| `rookOpenMg` / `rookOpenEg` | `int16_t` | Bonus for a rook on a file with no pawns of either colour. |
+| `rookSemiMg` / `rookSemiEg` | `int16_t` | Bonus for a rook on a file with no friendly pawns (enemy pawns present). |
+| `rookSeventhMg` / `rookSeventhEg` | `int16_t` | Bonus for a rook on its relative 7th rank. |
+| `knightOutpostMg` / `knightOutpostEg` | `int16_t` | Bonus for a knight on the relative 4th–6th rank, pawn-defended, that no enemy pawn can attack. |
+| `kingDanger` | `std::array<int16_t, SAFETY_DIM>` | Midgame danger penalty indexed by the summed attack weight of enemy pieces on the king zone (≥ 2 attackers required); an S-curve of positive penalties. |
+| `kingShieldNearMg` / `kingShieldFarMg` | `int16_t` | Midgame-only bonus per friendly pawn sheltering the king, on the rank immediately in front (`Near`) / one rank beyond (`Far`), over the three files centred on the king. |
+| `kingStormNearMg` / `kingStormFarMg` | `int16_t` | Midgame-only penalty (≤ 0) per enemy pawn advancing on the king, two ranks in front (`Near`) / three ranks (`Far`), over the same three files. |
+
+- **Piece index (0..5):** `P, N, B, R, Q, K`, matching `PIECE_TYPES` in `eval.cpp`.
+- **Square orientation:** tables are stored in **White's a8-first view** (index 0 =
+  a8, 63 = h1). `evaluate` reads a White piece at library square `s` as
+  `mg[pt][s ^ 56]` (flip the rank) and a Black piece at `s` as `mg[pt][s]` (the
+  vertical mirror), subtracting the latter. This is the classic PeSTO mapping and is
+  what makes the eval colour-symmetric.
+- **Combined tables:** each entry already includes the piece's material value, so
+  there is no separate material term. `DEFAULT_EVAL_PARAMS` is `MG_VALUE[pt] +
+  MG_DELTA[pt][sq]` (and the endgame analogue), summed at compile time by
+  `buildDefaultParams`.
+
+### `DEFAULT_EVAL_PARAMS`
+
+`extern const EvalParams` — the PeSTO/Kaufman-seeded default tables, baked at
+namespace scope. The search hot path evaluates against these; they are the starting
+point Texel tuning refits. Copy it into a mutable `EvalParams` to perturb during
+tuning.
 
 ## Functions
 
-### `evaluate`
+### `evaluate` (2-arg, search hot path)
 
-Compute the static evaluation of `board`.
+`Value evaluate(const Board& board, Value tempo)` — evaluate against
+`DEFAULT_EVAL_PARAMS`. This is the form the search calls.
 
-**When to use:** at search leaf nodes, to score a quiet position. Phase 0 has no
-quiescence, so it is called directly when `depth <= 0`.
+### `evaluate` (3-arg, tuner)
+
+`Value evaluate(const Board& board, const EvalParams& params, Value tempo)` — score
+against a candidate parameter set. Used by the Texel tuner to measure the loss of a
+perturbed table.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `board` | `const Board&` | Position to score. Read-only; not modified. |
+| `params` | `const EvalParams&` | Weight tables to score with (3-arg form only). |
 | `tempo` | `Value` | Side-to-move bonus (centipawns), added after the perspective flip. A self-play-tunable knob; callers pass [`Tunables::tempo`](search.hpp.md#struct-tunables) (default `9`). |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — centipawns from the
 side-to-move's perspective. Positive favors the side to move. Computed as the
-white-minus-black material sum, negated for Black to move (negamax convention),
+white-relative tapered PSQT sum, negated for Black to move (negamax convention),
 plus the `tempo` bonus.
 
-**Side Effects:** none (pure function of `board`).
+**Tapered eval:** a game-phase counter is accumulated from non-pawn material
+(`PHASE_WEIGHT` = knight/bishop 1, rook 2, queen 4; both sides), clamped to
+`PHASE_MAX = 24`. The returned score interpolates the midgame and endgame table
+sums: `(mg * phase + eg * (PHASE_MAX - phase)) / PHASE_MAX` (24 = pure opening, 0 =
+bare endgame). This removes eval discontinuities and lets pawns and the king rise in
+value toward the endgame.
 
-**Performance:** per-leaf hot path. Phase 0 is O(1) over piece-type popcounts via
-`Board::pieces(pt, color).count()`.
+**Mobility:** each knight/bishop/rook/queen scores `mobMg`/`mobEg` indexed by how
+many of its attacked squares fall in the side's **mobility area** — squares that are
+neither occupied by a friendly piece nor attacked by an enemy pawn (sliders are
+blocked by the full occupancy). The two colours' mobility is accumulated into the
+same `mg`/`eg` sums (White adds, Black subtracts) before the taper, so it inherits
+the phase blend. This is the second-biggest HCE term after PSQT and reuses the
+library's `attacks::` tables.
 
-**Warnings:** the tempo bonus is applied **after** the perspective flip, so it
-always favors the side to move (correct). When adding asymmetric terms later,
-respect the same side-relative sign convention.
+**Pawn structure:** per pawn, an **isolated** penalty (no friendly pawn on an
+adjacent file) and a **passed** bonus (no enemy pawn on the same or adjacent files
+ahead, scaled by the pawn's relative rank); per file, a **doubled** penalty for each
+extra pawn sharing it. Computed over the raw pawn bitboards against compile-time file
+and passed-front-span masks. Accumulated into the same tapered `mg`/`eg` sums. A
+**pawn hash** (caching this by pawn Zobrist, since pawn structure changes rarely) is a
+planned NPS optimization — the term is recomputed from scratch for now.
+
+**King safety:** for each king, sum an **attack weight** over the enemy
+knights/bishops/rooks/queens that attack the king zone (the king's square + its
+neighbours) — weights knight/bishop 2, rook 3, queen 5 (`KS_WEIGHT`). Only when **≥ 2**
+attackers bear on the zone, the summed weight (clamped to `[0, SAFETY_DIM)`) indexes
+the `kingDanger` table; the penalty is subtracted from the defending side (White gains
+from the danger to Black's king and loses from its own). The nonlinear S-curve lives in
+the *table values*, so the eval stays **linear in the tunable entries**. Added to `mg`
+only, so the taper fades king safety toward zero in the endgame where the king is safe.
+This is the highest-payoff term in sharp positions and the most expensive (it regenerates
+each attacker's attacks).
+
+**King pawn shield:** on top of the danger table, each king scores a shelter bonus
+(`addKingShield`) for its own pawns standing in front of it — the three files centred on
+the king (clamped inboard so an edge king still spans three files), split into the rank
+immediately ahead (`kingShieldNearMg`) and the next rank up (`kingShieldFarMg`). The bands
+are compile-time masks (`SHIELD_NEAR_*`/`SHIELD_FAR_*`); the score is a popcount of
+friendly pawns in each band times its weight, added to `mg` only (shelter is a midgame
+concern), White positive and Black negative. Seeds `10`/`4` (near shelters more than far).
+
+**King pawn storm:** the mirror term (`addKingStorm`) charges a midgame penalty for *enemy*
+pawns advancing on the king over the same three files — a band two ranks in front
+(`kingStormNearMg`, bearing down on the shield) and three ranks in front (`kingStormFarMg`,
+still rolling in), reusing `buildShieldMask` at distance 2 and 3 (`STORM_NEAR_*`/`STORM_FAR_*`).
+A popcount of enemy pawns per band times its (negative) weight, `mg` only, charged to the
+defending side. Seeds `-8`/`-3`. Shield and storm read disjoint pawn sets (own vs enemy) on a
+square, so they never double-count. Blocked-storm damping is a possible later refinement.
+
+**Piece terms:** the **bishop pair** bonus (≥ 2 bishops); per rook, an **open-file**
+(no pawns of either colour) or **semi-open-file** (no friendly pawns) bonus and a
+**7th-rank** bonus (relative rank 7); per knight, an **outpost** bonus when it sits on
+the relative 4th–6th rank, is defended by a friendly pawn, and no enemy pawn can
+advance to attack it (adjacent files ahead, reusing the passed-pawn masks). The
+outpost test reuses the mobility pawn-attack bitboards, passed in per colour.
+
+**Side Effects:** none (pure function of `board` and `params`).
+
+**Performance:** per-leaf hot path. Recomputed from scratch each call — a bitboard
+pop-loop per piece type for the PSQT sum; a sliding `attacks::` lookup per
+knight/bishop/rook/queen plus a popcount for mobility; a per-pawn scan plus per-file
+popcounts for pawn structure; and, for king safety, a second sliding-attack pass over
+each side's pieces to test overlap with the enemy king zone. Mobility and king safety
+are the dominant added costs. Planned optimizations: an **incremental** PSQT sum on
+make/unmake (the discipline NNUE's accumulator reuses in Phase 2), a **pawn hash**
+caching the pawn-structure score, and skipping king safety at low game phase (endgame).
+From-scratch is correct and simple for now.
+
+**Warnings:**
+- The tempo bonus is applied **after** the perspective flip, so it always favors the
+  side to move (correct). When adding asymmetric terms later, respect the same
+  side-relative sign convention.
+- The colour-symmetry invariant `evaluate(pos, 0) == evaluate(mirror(pos), 0)` (for
+  the vertical-mirror/colour-swap with side-to-move flipped) must hold for any table
+  values — it is asserted in [test_eval.cpp](../tests/test_eval.cpp.md). A failure is
+  an orientation bug in the `^ 56` mapping, not a tuning issue.

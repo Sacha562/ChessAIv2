@@ -35,15 +35,31 @@ if(USE_PEXT)
 endif()
 add_test(NAME unit COMMAND chessai-tests)
 
+# --- Offline tuning tools -------------------------------------------------
+# tuner: Texel eval tuner (links only the eval). extract: PGN -> labeled-FEN
+# dataset builder (header-only). Neither is part of the engine or test build.
+add_executable(tuner tools/tune.cpp src/eval.cpp)
+target_include_directories(tuner PRIVATE include src)
+add_executable(extract tools/extract.cpp)
+target_include_directories(extract PRIVATE include src)
+
 # --- BMI2 PEXT sliding move generation (fast on Zen 3 / modern Intel) ---
 option(USE_PEXT "Use BMI2 PEXT for sliding move generation" ON)
 if(USE_PEXT)
     target_compile_definitions(chessai PRIVATE CHESS_USE_PEXT)
+    target_compile_definitions(tuner PRIVATE CHESS_USE_PEXT)
+    target_compile_definitions(extract PRIVATE CHESS_USE_PEXT)
 endif()
 
 # --- Optimization flags ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(chessai PRIVATE
+        $<$<CONFIG:Release>:-O3;-march=native;-funroll-loops>
+        -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(tuner PRIVATE
+        $<$<CONFIG:Release>:-O3;-march=native;-funroll-loops>
+        -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(extract PRIVATE
         $<$<CONFIG:Release>:-O3;-march=native;-funroll-loops>
         -Wall -Wextra -Wno-unused-parameter)
 
