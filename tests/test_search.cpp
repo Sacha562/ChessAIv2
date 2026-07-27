@@ -74,3 +74,37 @@ TEST_CASE("a low singular trigger depth still solves the forced tactic") {
 TEST_CASE("singular search is deterministic") {
     CHECK(bestMove(HANGING_QUEEN, 9, singular(true)) == bestMove(HANGING_QUEEN, 9, singular(true)));
 }
+
+TEST_CASE("razoring and ProbCut leave a forced tactic intact") {
+    // Both ship off; turning them on must reshape the tree without changing the verdict
+    // on a position whose best move is forced.
+    Tunables on;
+    on.useRazoring = true;
+    on.useProbCut  = true;
+
+    for (const char* fen : {HANGING_QUEEN, FREE_KNIGHT}) {
+        CHECK(bestMove(fen, 8, on) == bestMove(fen, 8, Tunables{}));
+    }
+}
+
+TEST_CASE("an eager razoring gate still wins the hanging piece") {
+    // Widen the razoring gate far past its default so it fires on almost every shallow
+    // node: the q-search verification must still refuse to prune a winning capture.
+    Tunables eager    = Tunables{};
+    eager.useRazoring = true;
+    eager.razorBase   = 600;
+    eager.razorMargin = 400;
+    CHECK(bestMove(HANGING_QUEEN, 8, eager) == "e4d5");
+    CHECK(bestMove(FREE_KNIGHT, 8, eager) == "e4d5");
+}
+
+TEST_CASE("an eager ProbCut still wins the hanging piece") {
+    // Lowest trigger depth and a thin margin, so the shallow capture search runs
+    // constantly; the forced capture must survive.
+    Tunables eager        = Tunables{};
+    eager.useProbCut      = true;
+    eager.probCutMinDepth = 3;
+    eager.probCutMargin   = 50;
+    CHECK(bestMove(HANGING_QUEEN, 8, eager) == "e4d5");
+    CHECK(bestMove(FREE_KNIGHT, 8, eager) == "e4d5");
+}

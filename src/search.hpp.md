@@ -45,7 +45,11 @@ a [transposition table](tt.hpp.md).
   selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
   `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
   `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH`, `SINGULAR_TT_DEPTH_MARGIN`
-  (how much shallower than the node the TT entry may be to seed a singular verification) —
+  (how much shallower than the node the TT entry may be to seed a singular verification),
+  `HIST_PRUNE_MAX_DEPTH` (depth gate for history pruning), `HIST_LMR_MAX_PLIES` (cap on
+  the history-driven LMR adjustment), `RAZOR_MAX_DEPTH`, and the ProbCut trio
+  `PROBCUT_REDUCTION` / `PROBCUT_TT_DEPTH_MARGIN` / `PROBCUT_MIN_SEE_THRESHOLD` (a
+  `static_assert` pins `PROBCUT_TT_DEPTH_MARGIN > SINGULAR_TT_DEPTH_MARGIN`) —
   plus the helpers `lmpCount`
   and `hasNonPawnMaterial` live in an anonymous namespace in `search.cpp` (internal
   linkage). The **pruning margins** that used to be `constexpr` (`NMP_BASE`,
@@ -105,6 +109,12 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
 | `useSingular` | `bool` | `true` | Enable singular extensions (Phase 1c) (`UseSingular`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
+| `useHistPrune` | `bool` | `true` | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). |
+| `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). |
+| `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. |
+| `useCaptureHist` | `bool` | `true` | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. |
+| `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
+| `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
 | `lmrBase` | `int` | `68` | LMR reduction offset ×100 (`LmrBase`); `0.68` in the curve. |
 | `lmrDivisor` | `int` | `162` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.62` in the curve (kept ≥ 1). |
@@ -117,6 +127,12 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `singularMinDepth` | `int` | `7` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
 | `singularMargin` | `int` | `1` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
 | `singularDoubleMargin` | `int` | `46` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
+| `histPruneMargin` | `int` | `2048` | History-pruning threshold per remaining ply (`HistPruneMargin`): a late quiet scoring below `−histPruneMargin·depth` is skipped. History-score units, not cp. |
+| `histLmrDiv` | `int` | `8192` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
+| `razorBase` | `Value` | `180` | Razoring base margin, cp (`RazorBase`). |
+| `razorMargin` | `Value` | `160` | Razoring margin per remaining ply, cp (`RazorMargin`); the gate is `eval + razorBase + razorMargin·depth <= alpha`. |
+| `probCutMinDepth` | `int` | `5` | Minimum depth at which ProbCut is attempted (`ProbCutMinDepth`). |
+| `probCutMargin` | `Value` | `180` | ProbCut searches against `beta + probCutMargin`, cp (`ProbCutMargin`). |
 
 The **forward-pruning margins** (`lmrBase` … `lmpBase`) and the **singular knobs**
 (`singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are exposed as UCI options
@@ -139,6 +155,12 @@ via [`History::setEnabled`](history.hpp.md#historysetenabled) (called at the top
 [`search`](#searchersearch); and `useAspiration` / `aspirationDelta` drive
 [`aspirationSearch`](#searcheraspirationsearch). With every selective toggle off the
 search reproduces the plain PVS + step-1-ordering engine.
+
+The **Phase 1d knobs** (`useHistPrune` / `histPruneMargin`, `useHistLmr` / `histLmrDiv`)
+are denominated in **history-score units**, not centipawns: the quiet score they read is
+the butterfly + continuation sum, which lives in `±(1 + CONT_PLIES) · MAX_HISTORY`
+(`±49152`). Both are seeds pending an SPSA pass; the depth gate `HIST_PRUNE_MAX_DEPTH` and
+the `HIST_LMR_MAX_PLIES` cap stay `constexpr`.
 
 The **Phase 1c knobs** (`useContHist`, and the singular set `useSingular` /
 `singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are new this phase; the
@@ -180,6 +202,7 @@ just want the defaults).
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves) for this search. |
+| `corrHist_` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Learned per-pawn-structure static-eval correction for this search (64 KB, zeroed on construction). |
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
 | `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion; read as `[ply-1]` / `[ply-2]` to build a node's continuation context. |
@@ -192,7 +215,7 @@ just want the defaults).
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -247,12 +270,14 @@ full Phase 1b selective-search stack (returns `best`). Order of operations:
 
 1. draw check → **leaf / ply guard → [`qsearch`](#searcherqsearch)** (when `depth <= 0`
    or `ply >= MAX_PLY - 1`);
-2. **TT probe** (cutoff only off the PV) → **static eval** (reused from the TT when
-   present; skipped in check) → **`improving`** trend;
-3. **whole-node pruning** (off-PV, not in check, away from mate): **RFP** then **NMP**;
+2. **TT probe** (cutoff only off the PV) → **static eval** (raw value reused from the TT
+   when present, then [correction history](corrhist.hpp.md) applied on top; skipped in
+   check) → **`improving`** trend;
+3. **whole-node pruning** (off-PV, not in check, away from mate): **razoring** → **RFP** →
+   **NMP** → **ProbCut**;
 4. **IIR** (gated) → movegen → resolve the **continuation context** (the moves 1/2 plies
    back, from the search stack) → **[`orderMoves`](movepick.hpp.md#ordermoves)**;
-5. **move loop**: per-move quiet pruning (**LMP**, **futility**) → **singular extension**
+5. **move loop**: per-move quiet pruning (**LMP**, **futility**, **history pruning**) → **singular extension**
    (TT move only, pre-make) → record the search-stack move → make → **check extension** →
    **LMR** reduction → **PVS** search/re-search → cutoff bookkeeping (quiet-cutoff
    [`history`](history.hpp.md#historyupdatequietcutoff) updates, including continuation
@@ -267,11 +292,39 @@ searched exactly.
 
 **Selective-search steps** (each gated by its [`Tunables`](#struct-tunables) toggle):
 
-- **Static eval & `improving`** — at a non-check node the static eval is read from the
-  TT (`tt.eval`) or computed by [`evaluate`](eval.hpp.md#evaluate) and cached in
-  `staticEvals_[ply]`. `improving` is true when this eval exceeds the same side's eval
+- **Static eval & `improving`** — at a non-check node the **raw** static eval is read from
+  the TT (`tt.eval`) or computed by [`evaluate`](eval.hpp.md#evaluate), then
+  [`correctedEval`](#searchercorrectedeval) adds the
+  [correction-history](corrhist.hpp.md) adjustment for this pawn structure; the
+  **corrected** value is what lands in `staticEvals_[ply]` and drives every downstream
+  test. `improving` is true when this eval exceeds the same side's eval
   two plies ago (`staticEvals_[ply-2]`) — pruning is a touch more aggressive when the
   position is *not* improving.
+- **Correction history** — after the move loop, a node whose verdict is trustworthy
+  teaches [`corrHist_`](corrhist.hpp.md#correctionhistoryupdate) the residual
+  `best − eval`: not in check, a real **quiet** best move, no mate score, not inside a
+  singular verification, and the bound must agree with the residual's sign (`BOUND_LOWER`
+  may only teach "the eval was too low", `BOUND_UPPER` only "too high"). The **raw** eval —
+  never the corrected one — is what goes into the TT, so a revisit corrects once rather
+  than compounding.
+- **Razoring** (default **off**) — near the horizon (`depth <= RAZOR_MAX_DEPTH`), a static
+  eval so far under alpha that `eval + razorBase + razorMargin·depth <= alpha` is verified
+  by a null-window [`qsearch`](#searcherqsearch) instead of a full-width search; if the
+  q-search also fails low, its score is returned. Two guards beyond the usual ones: it is
+  an **alpha-side** prune returning a q-search score, and this q-search reports a stalemate
+  as its stand-pat eval rather than `VALUE_DRAW`, so razoring takes the same
+  `hasNonPawnMaterial` guard as NMP; and it never runs inside a singular verification,
+  where a cheap fail-low would fake a singular move.
+- **ProbCut** (default **off**) — at `depth >= probCutMinDepth`, a capture that beats a
+  raised beta (`probBeta = beta + probCutMargin`) is treated as evidence the node fails
+  high. Only captures whose [`seeGE`](see.hpp.md#seege) clears `probBeta − eval` (floored at
+  `PROBCUT_MIN_SEE_THRESHOLD`) are tried; each is screened by a null-window q-search and,
+  if that clears `probBeta`, verified by a real search at `depth − PROBCUT_REDUCTION`. A
+  success stores a `BOUND_LOWER` entry at `depth − PROBCUT_TT_DEPTH_MARGIN` and returns.
+  Storing that bound **shallower than `SINGULAR_TT_DEPTH_MARGIN`** is load-bearing: at
+  `depth − 3` a deliberately optimistic ProbCut bound would qualify as a
+  singular-verification target and manufacture spurious extensions. Skipped when the TT
+  already refutes `probBeta` at that depth, and never inside a singular verification.
 - **Reverse futility pruning (RFP)** — near the horizon (`depth <= RFP_MAX_DEPTH`), a
   static eval a depth-scaled margin **above** beta (`eval - RFP_MARGIN*depth >= beta`) is
   assumed to hold and `eval` is returned.
@@ -285,6 +338,12 @@ searched exactly.
   the horizon cannot reach alpha and is skipped.
 - **Late-move pruning (LMP)** — past a depth-scaled quiet count (`lmpCount`, smaller when
   not `improving`) the remaining quiets are skipped.
+- **History pruning** — near the horizon (`depth <= HIST_PRUNE_MAX_DEPTH`) a quiet whose
+  combined [`quietHistory`](history.hpp.md#historyquiethistory) score falls below
+  `−histPruneMargin · depth` is skipped: it has been refuted everywhere it was tried, so
+  it is not worth a node. The score is read **once per move** and shared with the LMR
+  adjustment below, so the extra cost is one butterfly + up-to-two continuation lookups
+  per quiet (the same entries ordering just touched).
 - **Singular extension** — for the **TT move only**, decided *before* it is made. When
   the TT entry is a deep enough lower bound (`tt.depth >= depth − SINGULAR_TT_DEPTH_MARGIN`,
   bound `LOWER`/`EXACT`, `depth >= singularMinDepth`, not a mate score, not already inside
@@ -299,11 +358,14 @@ searched exactly.
   per-ply tables. The two extensions add: `newDepth = depth − 1 + singularExt + checkExt`.
 - **Late move reductions (LMR)** — late quiet, non-checking moves are searched at
   `newDepth - reduction`, where `reduction` comes from the `ln(depth)·ln(moveCount)`
-  table, reduced by one on the PV and one when `improving`, clamped to keep the reduced
-  depth `>= 1`. A reduced search that beats alpha is re-searched at full `newDepth`
-  (null window), then at the full window if it lands in `(alpha, beta)`.
+  table, reduced by one on the PV and one when `improving`, then (when `useHistLmr`)
+  adjusted by the move's own history: `reduction -= clamp(histScore / histLmrDiv,
+  −HIST_LMR_MAX_PLIES, +HIST_LMR_MAX_PLIES)`, so a quiet with good history is reduced
+  less and one with bad history more. Finally clamped to keep the reduced depth `>= 1`. A
+  reduced search that beats alpha is re-searched at full `newDepth` (null window), then at
+  the full window if it lands in `(alpha, beta)`.
 
-The per-move quiet pruning (futility/LMP) and reductions never touch the first move,
+The per-move quiet pruning (futility/LMP/history) and reductions never touch the first move,
 never fire in check or on the PV, and use `continue` (not `break`) so interleaved
 captures/checks are still searched; they are also suppressed while `best` is still a
 mate loss (`best <= VALUE_MATED_IN_MAX_PLY`), so a forced escape is never pruned.
@@ -324,6 +386,12 @@ score folds in [`continuationScore`](history.hpp.md#historycontinuationscore)) a
 recursing (a null move records `-1`), so a child reads `[ply-1]` and a grandchild
 `[ply-2]`. The context is empty at the root, after a null move, or before enough plies
 exist.
+
+**Capture-cutoff learning:** on a fail-high caused by a **capture**,
+[`history_.updateCaptureCutoff`](history.hpp.md#historyupdatecapturecutoff) rewards it and
+penalises the captures tried before it (tracked in a per-node `capturesTried` stack array,
+the capture twin of `quietsTried`). Killers, countermoves and the quiet tables stay
+untouched.
 
 **Quiet-cutoff learning:** on a fail-high (`alpha >= beta`) caused by a **quiet** move,
 [`history_.updateQuietCutoff`](history.hpp.md#historyupdatequietcutoff) rewards that move,
@@ -425,6 +493,31 @@ gating to `depth >= 5` avoids the noisy shallow iterations. The final in-window 
 sets [`rootBest_`](#class-searcher) correctly; an aborted re-search (`timeUp_`) is
 discarded by [`think`](#searcherthink) like any incomplete iteration.
 
+### `Searcher::correctedEval` (private)
+
+The static eval as the search reasons about it: `raw` plus the
+[correction-history](corrhist.hpp.md#correctionhistorycorrected) adjustment for this
+position's pawn structure and side to move, or `raw` unchanged when
+[`tp_.useCorrHist`](#struct-tunables) is off.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `board` | `const Board&` | Position being evaluated (keys the correction bucket). |
+| `raw` | `Value` | The raw [`evaluate`](eval.hpp.md#evaluate) score — passed in so the caller can reuse a TT-cached static eval instead of re-evaluating. |
+
+**Returns:** [`Value`](types.hpp.md#using-value--int) — side-to-move-relative cp, clamped
+clear of the mate range.
+
+**Side Effects:** none (reads `corrHist_`).
+
+**Performance:** per node — one pawn-bitboard mix plus one array read on top of the eval.
+
+**Warnings:** the corrected value is what feeds RFP / futility / NMP / `improving` and
+the q-search stand-pat, but the **raw** value is what is written to the TT
+([`Searcher::search`](#searchersearch)); storing the corrected one would re-correct on
+every revisit.
+
 ### `Searcher::buildReductions` (private)
 
 (Re)build the `reductions_` LMR table from the tunable curve
@@ -457,7 +550,9 @@ when aborting (`timeUp_`).
 
 **Behavior:**
 - **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`
-  seeds `best` as a lower bound — return immediately on `best >= beta`, else raise `alpha`. When
+  — passed through [`correctedEval`](#searchercorrectedeval), so q-search and the main
+  search agree on what a position is worth —
+  seeds `best` as a lower bound; return immediately on `best >= beta`, else raise `alpha`. When
   **in check**, standing pat is forbidden: `best` starts at `-∞` and every legal
   evasion is searched (`orderMoves`, ordered with the shared `history_` killers/history
   but no TT/countermove context), so a genuine checkmate scores `mated_in(ply)`.

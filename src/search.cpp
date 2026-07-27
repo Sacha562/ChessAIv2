@@ -45,6 +45,16 @@ constexpr int LMP_MAX_DEPTH = 6;
 constexpr int LMR_MIN_DEPTH = 3;
 constexpr int LMR_MIN_MOVES = 2; // start reducing at the 3rd move
 
+// History pruning (Phase 1d): near the horizon, skip a late quiet whose butterfly +
+// continuation score is far enough negative that it has failed everywhere it was tried.
+// A history-aware complement to LMP's move count; the margin is tunable
+// (Tunables::histPruneMargin).
+constexpr int HIST_PRUNE_MAX_DEPTH = 6;
+
+// History-modulated LMR (Phase 1d): the reduction moves by at most this many plies with
+// the quiet's history score (Tunables::histLmrDiv converts score units to plies).
+constexpr int HIST_LMR_MAX_PLIES = 2;
+
 // Aspiration windows: only worthwhile once a few iterations have stabilised.
 constexpr int ASPIRATION_MIN_DEPTH = 5;
 
@@ -52,6 +62,23 @@ constexpr int ASPIRATION_MIN_DEPTH = 5;
 // to be a trustworthy singular-verification target (tt.depth >= depth - this). The
 // verification runs at (depth - 1) / 2. Structural gate; the margins are tunable.
 constexpr int SINGULAR_TT_DEPTH_MARGIN = 3;
+
+// Razoring (Phase 1d): near the horizon, a static eval this far below alpha is unlikely
+// to be lifted by a quiet move, so spend a q-search instead of a full-width search and
+// fail low when the q-search agrees. Margins are tunable (Tunables::razorBase /
+// razorMargin).
+constexpr int RAZOR_MAX_DEPTH = 3;
+
+// ProbCut (Phase 1d): at real depth, a capture that beats a raised beta in a shallow
+// search usually beats it at full depth too. The verification runs at
+// depth - PROBCUT_REDUCTION, and its (deliberately optimistic) lower bound is stored
+// shallower still — strictly outside the window a singular verification will accept
+// (SINGULAR_TT_DEPTH_MARGIN) — so a ProbCut bound can never seed a singular extension.
+constexpr int   PROBCUT_REDUCTION         = 4;
+constexpr int   PROBCUT_TT_DEPTH_MARGIN   = PROBCUT_REDUCTION;
+constexpr Value PROBCUT_MIN_SEE_THRESHOLD = 1;
+static_assert(PROBCUT_TT_DEPTH_MARGIN > SINGULAR_TT_DEPTH_MARGIN,
+              "a ProbCut bound must be too shallow to seed a singular verification");
 
 // A TT entry may only cut when the fifty-move clock is well below the 100-halfmove
 // draw; otherwise a stored score can't be trusted (it may ignore the looming draw).
@@ -162,6 +189,10 @@ int Searcher::lmrReduction(int depth, int moveCount) const {
     return reductions_[std::min(depth, LMR_DIM - 1)][std::min(moveCount, LMR_DIM - 1)];
 }
 
+Value Searcher::correctedEval(const Board& board, Value raw) const {
+    return tp_.useCorrHist ? corrHist_.corrected(board, raw) : raw;
+}
+
 Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
                        Move excluded) {
     if (timeUp_) return VALUE_ZERO;
@@ -208,20 +239,40 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 
     // Static eval (used by the whole-node pruning below and the `improving` trend).
     // Reuse the TT's stored static eval when present; skip it entirely when in check.
+    // The TT holds the *raw* eval; the correction-history adjustment is applied on top
+    // here (and never stored back, or it would compound on every revisit).
+    Value rawEval = VALUE_NONE;
     Value eval;
     if (inCheck) {
         eval              = VALUE_NONE;
         staticEvals_[ply] = VALUE_NONE;
     } else {
-        eval = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : evaluate(board, tp_.tempo);
+        rawEval = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : evaluate(board, tp_.tempo);
+        eval    = correctedEval(board, rawEval);
         staticEvals_[ply] = eval;
     }
     const bool improving =
         !inCheck && ply >= 2 && staticEvals_[ply - 2] != VALUE_NONE && eval > staticEvals_[ply - 2];
 
+    Movelist moves;
+
     // Whole-node forward pruning: only off the PV, out of check, and away from mate
     // scores (where every ply matters).
     if (!pvNode && !inCheck && std::abs(beta) < VALUE_MATE_IN_MAX_PLY) {
+        // Razoring: the static eval is so far below alpha that only a tactic can rescue
+        // the node — let q-search look for one and fail low if it finds none. Unlike RFP
+        // and NMP this is an *alpha-side* prune that returns a q-search score, and this
+        // engine's q-search scores a stalemate as its stand-pat eval rather than a draw,
+        // so it takes the same non-pawn-material guard NMP uses. Never inside a singular
+        // verification, where a cheap fail-low would fake a singular move.
+        if (tp_.useRazoring && !inSingular && depth <= RAZOR_MAX_DEPTH &&
+            hasNonPawnMaterial(board, board.sideToMove()) &&
+            eval + tp_.razorBase + tp_.razorMargin * depth <= alpha) {
+            const Value razorScore = qsearch(board, alpha - 1, alpha, ply);
+            if (timeUp_) return VALUE_ZERO;
+            if (razorScore < alpha) return razorScore;
+        }
+
         // Reverse futility pruning (static null-move): a static eval this far above
         // beta near the horizon is assumed to hold.
         if (tp_.useRfp && depth <= RFP_MAX_DEPTH && eval - tp_.rfpMargin * depth >= beta)
@@ -242,14 +293,47 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             if (timeUp_) return VALUE_ZERO;
             if (nullScore >= beta) return is_mate(nullScore) ? beta : nullScore;
         }
+
+        // ProbCut: a capture that already beats a *raised* beta in a shallow search is
+        // strong evidence this node fails high at full depth. Only captures that can
+        // bridge the gap on material alone are tried (SEE >= probBeta - eval), each first
+        // screened by q-search and only then verified at depth - PROBCUT_REDUCTION. A TT
+        // entry that already refutes the raised beta at that depth skips the whole thing.
+        const Value probBeta = beta + tp_.probCutMargin;
+        if (tp_.useProbCut && !inSingular && depth >= tp_.probCutMinDepth &&
+            !(tt.hit && tt.depth >= depth - PROBCUT_REDUCTION &&
+              valueFromTT(tt.value, ply) < probBeta)) {
+            movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
+            orderCaptures(board, moves);
+            const Value seeThreshold = std::max<Value>(probBeta - eval, PROBCUT_MIN_SEE_THRESHOLD);
+
+            for (const auto& m : moves) {
+                if (!seeGE(board, m, seeThreshold)) continue;
+
+                contPiece_[ply] = static_cast<int>(board.at(m.from()));
+                contTo_[ply]    = m.to().index();
+                board.makeMove(m);
+                Value score = -qsearch(board, -probBeta, -probBeta + 1, ply + 1);
+                if (score >= probBeta)
+                    score = -search(board, depth - PROBCUT_REDUCTION, -probBeta, -probBeta + 1,
+                                    ply + 1, m);
+                board.unmakeMove(m);
+
+                if (timeUp_) return VALUE_ZERO;
+                if (score >= probBeta) {
+                    tt_.store(key, std::max(depth - PROBCUT_TT_DEPTH_MARGIN, 1),
+                              valueToTT(score, ply), rawEval, m, BOUND_LOWER);
+                    return score;
+                }
+            }
+        }
     }
 
     // Internal Iterative Reduction: with no hash move, ordering is unreliable, so
     // search shallower and let the reduced search supply a TT move for next time.
     if (tp_.useIir && depth >= IIR_MIN_DEPTH && ttMove == Move(Move::NO_MOVE)) --depth;
 
-    Movelist moves;
-    movegen::legalmoves(moves, board);
+    movegen::legalmoves(moves, board); // reuses the list ProbCut may have borrowed above
 
     if (moves.empty()) return inCheck ? mated_in(ply) : VALUE_DRAW;
 
@@ -275,11 +359,18 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     int   moveCount = 0;
     Move  quietsTried[constants::MAX_MOVES];
     int   nQuietsTried = 0;
+    Move  capturesTried[constants::MAX_MOVES];
+    int   nCapturesTried = 0;
     for (const auto& m : moves) {
         if (m == excluded) continue; // singular verification: search everything but the TT move
         ++moveCount;
         const bool isQuiet    = !board.isCapture(m);
         const int  movedPiece = static_cast<int>(board.at(m.from())); // colour+type, pre-move
+
+        // The quiet's combined butterfly + continuation history — the very score move
+        // ordering ranked it by. Drives history pruning and the LMR history adjustment.
+        const int histScore =
+            isQuiet ? history_.quietHistory(board.sideToMove(), contCtx, m, movedPiece) : 0;
 
         // Move-loop pruning of quiets: off the PV, out of check, once a real move has
         // been searched, and not while being mated (we still need an escape).
@@ -292,6 +383,11 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             // alpha near the horizon.
             if (tp_.useFutility && depth <= FUT_MAX_DEPTH &&
                 eval + tp_.futMargin * depth + tp_.futBase <= alpha)
+                continue;
+            // History pruning: a quiet this badly scored has been refuted everywhere it
+            // was tried before, so it is not worth a node near the horizon.
+            if (tp_.useHistPrune && depth <= HIST_PRUNE_MAX_DEPTH &&
+                histScore < -tp_.histPruneMargin * depth)
                 continue;
         }
 
@@ -339,6 +435,11 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             reduction = lmrReduction(depth, moveCount);
             if (pvNode) --reduction;
             if (improving) --reduction;
+            // History adjustment: reduce a well-scored quiet less and a badly scored one
+            // more, bounded so the curve still governs the reduction.
+            if (tp_.useHistLmr)
+                reduction -=
+                    std::clamp(histScore / tp_.histLmrDiv, -HIST_LMR_MAX_PLIES, HIST_LMR_MAX_PLIES);
             reduction = std::clamp(reduction, 0, newDepth - 1);
         }
 
@@ -373,9 +474,14 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             if (isQuiet)
                 history_.updateQuietCutoff(board, board.sideToMove(), ply, depth, prevMove, m,
                                            quietsTried, nQuietsTried, contCtx);
+            else
+                history_.updateCaptureCutoff(board, depth, m, capturesTried, nCapturesTried);
             break;
         }
-        if (isQuiet) quietsTried[nQuietsTried++] = m;
+        if (isQuiet)
+            quietsTried[nQuietsTried++] = m;
+        else
+            capturesTried[nCapturesTried++] = m;
     }
 
     // Don't store a singular-verification result: it is the value of a restricted move
@@ -384,7 +490,21 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         const Bound bound = best >= beta       ? BOUND_LOWER
                             : best > alphaOrig ? BOUND_EXACT
                                                : BOUND_UPPER;
-        tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : eval, bestMove, bound);
+
+        // Correction history: the search disagreed with the static eval by `best - eval`
+        // in this pawn structure — remember that residual so the next node here starts
+        // from a better guess. Only from a trustworthy verdict: out of check, with a real
+        // quiet best move (a capture's score says more about material than about the
+        // structure), away from mate scores, and only when the bound does not contradict
+        // the residual's sign (a fail-high is a lower bound, so it may only teach that
+        // the eval was too low, and vice versa).
+        if (tp_.useCorrHist && !inCheck && bestMove != Move(Move::NO_MOVE) && !is_mate(best) &&
+            !board.isCapture(bestMove) && !(bound == BOUND_LOWER && best <= eval) &&
+            !(bound == BOUND_UPPER && best >= eval))
+            corrHist_.update(board, depth, best - eval);
+
+        tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : rawEval, bestMove,
+                  bound);
     }
 
     return best;
@@ -436,7 +556,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     // forbidden in check, where the side to move must answer the threat.
     Value best = -VALUE_INFINITE;
     if (!inCheck) {
-        best = evaluate(board, tp_.tempo);
+        best = correctedEval(board, evaluate(board, tp_.tempo));
         if (best >= beta) return best; // fail-soft beta cutoff
         if (best > alpha) alpha = best;
     }
@@ -498,7 +618,8 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     nodes_  = 0;
     timeUp_ = false;
     tt_.newSearch();
-    history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove, tp_.useContHist);
+    history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove, tp_.useContHist,
+                        tp_.useCaptureHist);
     buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);

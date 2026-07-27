@@ -177,6 +177,18 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.useSingular = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseAspiration" && !value.empty()) {
             tunables_.useAspiration = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseHistPrune" && !value.empty()) {
+            tunables_.useHistPrune = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseHistLmr" && !value.empty()) {
+            tunables_.useHistLmr = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseCorrHist" && !value.empty()) {
+            tunables_.useCorrHist = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseCapHist" && !value.empty()) {
+            tunables_.useCaptureHist = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseRazoring" && !value.empty()) {
+            tunables_.useRazoring = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "UseProbCut" && !value.empty()) {
+            tunables_.useProbCut = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "AspirationDelta" && !value.empty()) {
             tunables_.aspirationDelta = std::clamp(std::stoi(value), 1, 500);
         }
@@ -205,6 +217,22 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.singularMargin = std::clamp(std::stoi(value), 1, 8);
         } else if (name == "SingularDoubleMargin" && !value.empty()) {
             tunables_.singularDoubleMargin = std::clamp(std::stoi(value), 0, 200);
+        }
+        // Phase 1d history-selectivity knobs (SPSA-tunable), in history-score units.
+        else if (name == "HistPruneMargin" && !value.empty()) {
+            tunables_.histPruneMargin = std::clamp(std::stoi(value), 128, 16384);
+        } else if (name == "HistLmrDiv" && !value.empty()) {
+            tunables_.histLmrDiv = std::clamp(std::stoi(value), 512, 65536);
+        }
+        // Phase 1d whole-node pruning margins (cp; SPSA-tunable).
+        else if (name == "RazorBase" && !value.empty()) {
+            tunables_.razorBase = std::clamp(std::stoi(value), 0, 600);
+        } else if (name == "RazorMargin" && !value.empty()) {
+            tunables_.razorMargin = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "ProbCutMinDepth" && !value.empty()) {
+            tunables_.probCutMinDepth = std::clamp(std::stoi(value), 3, 12);
+        } else if (name == "ProbCutMargin" && !value.empty()) {
+            tunables_.probCutMargin = std::clamp(std::stoi(value), 50, 500);
         }
     } catch (...) { /* ignore malformed values */
     }
@@ -241,6 +269,12 @@ void Engine::loop() {
                       << "option name UseCheckExt type spin default 1 min 0 max 1\n"
                       << "option name UseSingular type spin default 1 min 0 max 1\n"
                       << "option name UseAspiration type spin default 1 min 0 max 1\n"
+                      << "option name UseHistPrune type spin default 1 min 0 max 1\n"
+                      << "option name UseHistLmr type spin default 1 min 0 max 1\n"
+                      << "option name UseCorrHist type spin default 1 min 0 max 1\n"
+                      << "option name UseCapHist type spin default 1 min 0 max 1\n"
+                      << "option name UseRazoring type spin default 0 min 0 max 1\n"
+                      << "option name UseProbCut type spin default 0 min 0 max 1\n"
                       << "option name AspirationDelta type spin default 15 min 1 max 500\n"
                       << "option name LmrBase type spin default 68 min 0 max 200\n"
                       << "option name LmrDivisor type spin default 162 min 50 max 500\n"
@@ -253,6 +287,12 @@ void Engine::loop() {
                       << "option name SingularMinDepth type spin default 7 min 4 max 12\n"
                       << "option name SingularMargin type spin default 1 min 1 max 8\n"
                       << "option name SingularDoubleMargin type spin default 46 min 0 max 200\n"
+                      << "option name HistPruneMargin type spin default 2048 min 128 max 16384\n"
+                      << "option name HistLmrDiv type spin default 8192 min 512 max 65536\n"
+                      << "option name RazorBase type spin default 180 min 0 max 600\n"
+                      << "option name RazorMargin type spin default 160 min 0 max 400\n"
+                      << "option name ProbCutMinDepth type spin default 5 min 3 max 12\n"
+                      << "option name ProbCutMargin type spin default 180 min 50 max 500\n"
                       << "uciok" << std::endl;
         } else if (token == "isready") {
             std::cout << "readyok" << std::endl;

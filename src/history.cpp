@@ -37,6 +37,7 @@ void applyBonus(int16_t& entry, int bonus) {
 
 void History::clear() {
     std::memset(butterfly_, 0, sizeof(butterfly_));
+    std::memset(capture_, 0, sizeof(capture_));
     std::memset(continuation_->v, 0, sizeof(continuation_->v));
     const Move none = Move(Move::NO_MOVE);
     for (auto& perPly : killers_) {
@@ -58,6 +59,22 @@ int History::continuationScore(const ContHistContext& ctx, int movedPiece, int t
     if (ctx.piece1 >= 0) score += continuation_->v[ctx.piece1][ctx.to1][movedPiece][to];
     if (ctx.piece2 >= 0) score += continuation_->v[ctx.piece2][ctx.to2][movedPiece][to];
     return score;
+}
+
+int History::quietHistory(Color stm, const ContHistContext& ctx, Move move, int movedPiece) const {
+    return quietScore(stm, move) + continuationScore(ctx, movedPiece, move.to().index());
+}
+
+int History::victimIndex(const Board& board, Move move) {
+    const PieceType victim =
+        move.typeOf() == Move::ENPASSANT ? PieceType::PAWN : board.at<PieceType>(move.to());
+    return static_cast<int>(victim);
+}
+
+int History::captureScore(const Board& board, Move move) const {
+    if (!useCaptureHist_) return 0;
+    return capture_[static_cast<int>(board.at(move.from()))][move.to().index()]
+                   [victimIndex(board, move)];
 }
 
 void History::updateContinuation(const ContHistContext& ctx, int movedPiece, int to, int bonus) {
@@ -111,6 +128,22 @@ void History::updateQuietCutoff(const Board& board, Color stm, int ply, int dept
     // Countermove: this quiet refutes the opponent's previous move.
     const int idx = counterIndex(board, prevMove);
     if (idx >= 0) counters_[idx] = cutoff;
+}
+
+void History::updateCaptureCutoff(const Board& board, int depth, Move cutoff,
+                                  const Move* capturesTried, int nTried) {
+    if (!useCaptureHist_) return;
+
+    const int bonus = historyBonus(depth);
+    applyBonus(capture_[static_cast<int>(board.at(cutoff.from()))][cutoff.to().index()]
+                       [victimIndex(board, cutoff)],
+               bonus);
+    for (int i = 0; i < nTried; ++i) {
+        const Move m = capturesTried[i];
+        applyBonus(
+            capture_[static_cast<int>(board.at(m.from()))][m.to().index()][victimIndex(board, m)],
+            -bonus);
+    }
 }
 
 } // namespace engine

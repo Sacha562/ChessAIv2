@@ -32,6 +32,16 @@ static_assert(SCORE_COUNTER > QUIET_BAND, "history band overlaps the countermove
 static_assert(SCORE_QUIET - QUIET_BAND > SCORE_BAD_CAP + 16 * 900,
               "history band overlaps the losing-capture bucket");
 
+// Capture history is a refinement of the material verdict, not a replacement: dividing it
+// down keeps MVV-LVA's victim classes intact while letting a capture that keeps working
+// (or keeps failing) move within and just across them.
+constexpr int CAP_HIST_DIV = 4;
+
+// A capture's score never leaves its bucket: MVV-LVA (<= 16 * 900) plus the divided
+// capture history stays far inside the gap to the neighbouring tiers.
+static_assert(MAX_HISTORY / CAP_HIST_DIV + 16 * 900 < SCORE_GOOD_CAP - SCORE_KILLER1,
+              "capture history overflows the good-capture bucket");
+
 // Quiet-move ordering signals precomputed once per node (identical for every quiet).
 struct QuietOrder {
     const History*         hist;
@@ -45,15 +55,14 @@ struct QuietOrder {
 int scoreMove(const Board& board, Move move, Move ttMove, const QuietOrder& q) {
     if (move == ttMove) return SCORE_TT;
     if (board.isCapture(move)) {
-        const int mvv = mvvLva(board, move);
+        const int mvv = mvvLva(board, move) + q.hist->captureScore(board, move) / CAP_HIST_DIV;
         return seeGE(board, move, 0) ? SCORE_GOOD_CAP + mvv : SCORE_BAD_CAP + mvv;
     }
     if (move == q.killer1) return SCORE_KILLER1;
     if (move == q.killer2) return SCORE_KILLER2;
     if (move == q.counter) return SCORE_COUNTER;
-    const int cont = q.hist->continuationScore(*q.cont, static_cast<int>(board.at(move.from())),
-                                               move.to().index());
-    return SCORE_QUIET + q.hist->quietScore(q.stm, move) + cont;
+    const int movedPiece = static_cast<int>(board.at(move.from()));
+    return SCORE_QUIET + q.hist->quietHistory(q.stm, *q.cont, move, movedPiece);
 }
 
 // Stable insertion sort of `moves` by descending `scores` (move lists are short, so

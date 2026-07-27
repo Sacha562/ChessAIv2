@@ -16,6 +16,10 @@ countermoves          the quiet refutation indexed by the opponent's previous mo
 continuation history  saturating score for the current move conditioned on the piece+to
                       of a recent move (1 or 2 plies back) — a scored generalisation of
                       the countermove, and among the strongest modern quiet signals
+capture history       saturating per-(moving piece, target square, victim) score of
+                      cutoff success for captures (Phase 1d) — refines the SEE/MVV-LVA
+                      order, which knows the material at stake but not whether the
+                      capture actually works on this square
 ```
 
 A `History` is owned **per [`Searcher`](search.hpp.md#class-searcher)** — one search
@@ -79,18 +83,22 @@ all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
 | Member | Type | Description |
 |--------|------|-------------|
 | `butterfly_` | `int16_t[2][64][64]` | Per (color, from, to) cutoff score, bounded to `±MAX_HISTORY`. |
+| `capture_` | `int16_t[12][64][6]` | Per (moving piece, target square, victim type) capture-cutoff score, bounded to `±MAX_HISTORY` (~9 KB). |
 | `killers_` | `Move[MAX_PLY][2]` | Two killer moves per ply; slot 0 is the most recent. |
 | `counters_` | `Move[12 * 64]` | Countermove keyed by the previous move's piece (0–11) × target square. |
 | `continuation_` | `std::unique_ptr<ContTable>` | Continuation-history table `[priorPiece][priorTo][movedPiece][movedTo]` of `int16_t`, each bounded to `±MAX_HISTORY`. **Heap-owned** (~1.13 MB) — the `Searcher`/`History` lives on the search thread's stack, too small for it inline. |
-| `useKillers_` / `useHistory_` / `useCounter_` / `useContHist_` | `bool` | Per-signal on/off (default on); set by [`setEnabled`](#historysetenabled). |
+| `useKillers_` / `useHistory_` / `useCounter_` / `useContHist_` / `useCaptureHist_` | `bool` | Per-signal on/off (default on); set by [`setEnabled`](#historysetenabled). |
 
 **Methods:** [`clear`](#historyclear), [`setEnabled`](#historysetenabled),
 [`quietScore`](#historyquietscore), [`killer`](#historykiller),
 [`counter`](#historycounter), [`continuationScore`](#historycontinuationscore),
-[`updateQuietCutoff`](#historyupdatequietcutoff) (public); `counterIndex`,
-`updateContinuation` (private helpers).
+[`quietHistory`](#historyquiethistory), [`captureScore`](#historycapturescore),
+[`updateQuietCutoff`](#historyupdatequietcutoff),
+[`updateCaptureCutoff`](#historyupdatecapturecutoff) (public); `counterIndex`,
+`victimIndex`, `updateContinuation` (private helpers).
 
-**Used by:** [`Searcher`](search.hpp.md#class-searcher) (owns one),
+**Used by:** [`Searcher`](search.hpp.md#class-searcher) (owns one; its move loop reads
+[`quietHistory`](#historyquiethistory) for history pruning / LMR),
 [`orderMoves`](movepick.hpp.md#ordermoves) (reads the queries).
 
 ## Functions
@@ -106,13 +114,20 @@ configuration, not per-search state). The constructor allocates `continuation_` 
 ### `History::setEnabled`
 
 Enable or disable each signal independently: `setEnabled(killers, history, countermove,
-contHist)`. A disabled signal's query returns "empty" (`quietScore` → `0`, `killer`
-→ `NO_MOVE`, `counter` → `NO_MOVE`, `continuationScore` → `0`) so it has no ordering
-effect, while the (cheap) updates keep running (the continuation *update* is skipped when
-disabled). Set once per search from [`Tunables`](search.hpp.md#struct-tunables) at the top
-of [`Searcher::think`](search.hpp.md#searcherthink), driven by the `UseKillers` /
-`UseHistory` / `UseCountermove` / `UseContHist` UCI options. Exists to **A/B-isolate** each
-signal's Elo.
+contHist, captureHist)`. A disabled signal's query returns "empty" (`quietScore` → `0`,
+`killer` → `NO_MOVE`, `counter` → `NO_MOVE`, `continuationScore` → `0`, `captureScore` →
+`0`) so it has no ordering effect, while the (cheap) updates keep running (the
+continuation and capture *updates* are skipped when disabled). Set once per search from
+[`Tunables`](search.hpp.md#struct-tunables) at the top of
+[`Searcher::think`](search.hpp.md#searcherthink), driven by the `UseKillers` /
+`UseHistory` / `UseCountermove` / `UseContHist` / `UseCapHist` UCI options. Exists to
+**A/B-isolate** each signal's Elo.
+
+**Warning:** `quietHistory` is the sum of the butterfly and continuation queries, so
+turning **both** `UseHistory` and `UseContHist` off makes it identically `0` — which
+silently disables the search's history pruning and history-modulated LMR too. Ablate
+those with their own toggles (`UseHistPrune` / `UseHistLmr`), and when ablating
+`UseHistory` itself, turn them off as well so the measurement stays clean.
 
 ### `History::quietScore`
 
@@ -151,6 +166,44 @@ a colour+type index (0–11), `to` a square (0–63). Hot path — up to two arr
 **Returns:** `int`. Consumed by [`orderMoves`](movepick.hpp.md#ordermoves) to fold the
 continuation score into a quiet's ordering key.
 
+### `History::quietHistory`
+
+The combined quiet-ordering score of `move` for `stm` under the recent-move context
+`ctx`: [`quietScore`](#historyquietscore) plus
+[`continuationScore`](#historycontinuationscore), i.e. **exactly** the sum
+[`orderMoves`](movepick.hpp.md#ordermoves) ranks quiets by. In
+`[-(1 + CONT_PLIES) · MAX_HISTORY, +(1 + CONT_PLIES) · MAX_HISTORY]` (`±49152`), and `0`
+when both signals are disabled.
+
+**Parameters:** `stm` (`Color`), `ctx` (`const ContHistContext&`), `move` (`Move`),
+`movedPiece` (`int`, `move`'s colour+type index 0–11 — the caller already has it, so the
+query does not re-read the board).
+**Returns:** `int`. Hot path — up to three array reads.
+
+One definition, two consumers: [`orderMoves`](movepick.hpp.md#ordermoves) scores quiets
+with it, and [`Searcher::search`](search.hpp.md#searchersearch)'s move loop reads it per
+quiet to drive **history pruning** and the **history-modulated LMR** adjustment (Phase
+1d) — so pruning, reduction, and ordering can never disagree about how good a quiet has
+been.
+
+### `History::captureScore`
+
+Capture-history score of `move` — how often taking **this victim on this square with this
+piece** has produced a beta cutoff — in `[-MAX_HISTORY, MAX_HISTORY]`; `0` when capture
+history is disabled or the bucket is untouched. `move` must be a capture.
+
+**Parameters:** `board` (`const Board&`, the position with `move` unmade), `move`
+(`Move`).
+**Returns:** `int`. Hot path — one array read (plus the victim lookup).
+
+The bucket is `(moving piece 0–11, target square 0–63, victim type 0–5)`; an en-passant
+capture keys on `PAWN` since its target square is empty. Note the **from**-square is not
+part of the key: two different attackers of the same type taking the same victim on the
+same square share a bucket, which is the intended generalisation.
+
+**Used by:** [`orderMoves`](movepick.hpp.md#ordermoves), which folds it (divided down) into
+the MVV-LVA score of both the good- and bad-capture tiers.
+
 ### `History::updateQuietCutoff`
 
 Record a quiet-move fail-high. Called once per beta-cutoff **by a quiet move** from
@@ -177,9 +230,33 @@ move in `quietsTried` by the same magnitude (the **malus**) in both tables; push
 countermove to `prevMove`. The private `updateContinuation` helper applies the bonus to
 each prior ply present in `ctx`; it runs only when continuation history is enabled.
 
-**Warnings:** both the butterfly and continuation updates are **gravity** updates —
+### `History::updateCaptureCutoff`
+
+Record a **capture** beta-cutoff: reward `cutoff` and penalise every capture in
+`capturesTried` that was searched first and failed to cut, with the same
+`historyBonus(depth)` magnitude and the same gravity update as the quiet tables. A no-op
+when capture history is disabled.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `board` | `const Board&` | The node position, every move unmade (the caller updates after `unmakeMove`). |
+| `depth` | `int` | Remaining depth; drives the bonus magnitude. |
+| `cutoff` | `Move` | The capture that caused the fail-high. |
+| `capturesTried` | `const Move*` | Captures searched **before** `cutoff` that failed to cut. |
+| `nTried` | `int` | Length of `capturesTried` (may be `0`, in which case the pointer is unused). |
+
+**Side Effects:** writes `1 + nTried` capture-history entries.
+
+**Warnings:** killers, countermoves, butterfly and continuation history are deliberately
+**not** touched — those tiers exist to order quiets, and feeding captures into them would
+corrupt both. Only main-search cutoffs update the table; q-search orders captures with
+[`orderCaptures`](movepick.hpp.md#ordercaptures) (plain MVV-LVA) and neither reads nor
+writes capture history.
+
+**Warnings (quiet tables):** both the butterfly and continuation updates are **gravity** updates —
 `entry += bonus − entry·|bonus|/MAX_HISTORY` — which drive the entry toward the bound
 while damping as it approaches, so `|entry|` never exceeds `MAX_HISTORY` (with the bonus
 itself clamped to that range). This bounds each entry inside its `int16_t` slot **and**
-inside movepick's quiet score band. Only quiet cutoffs update history: capture cutoffs
-are ordered by SEE/MVV-LVA and are not tracked here (capture history is a later step).
+inside movepick's quiet score band. Only quiet cutoffs reach this update; a capture
+cutoff goes to [`updateCaptureCutoff`](#historyupdatecapturecutoff) instead.

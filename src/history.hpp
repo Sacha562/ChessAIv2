@@ -60,11 +60,12 @@ public:
     // Enable/disable each signal independently. A disabled signal returns "empty" from
     // its query (so it has no ordering effect) while still being updated cheaply. Used
     // to A/B-isolate each heuristic's Elo via UCI toggles; all default on.
-    void setEnabled(bool killers, bool history, bool countermove, bool contHist) {
-        useKillers_  = killers;
-        useHistory_  = history;
-        useCounter_  = countermove;
-        useContHist_ = contHist;
+    void setEnabled(bool killers, bool history, bool countermove, bool contHist, bool captureHist) {
+        useKillers_     = killers;
+        useHistory_     = history;
+        useCounter_     = countermove;
+        useContHist_    = contHist;
+        useCaptureHist_ = captureHist;
     }
 
     // --- Queries (hot path: read once per move during ordering) ---
@@ -88,6 +89,23 @@ public:
     // has no prior move. `movedPiece` is a colour+type index (0–11); `to` a square (0–63).
     [[nodiscard]] int continuationScore(const ContHistContext& ctx, int movedPiece, int to) const;
 
+    // Combined quiet-ordering score of `move` for side `stm` under the recent-move
+    // context `ctx`: butterfly plus continuation history, i.e. exactly the sum move
+    // ordering sorts quiets on. In [-(1 + CONT_PLIES) * MAX_HISTORY, +same].
+    // `movedPiece` is `move`'s colour+type index (0–11), which the caller already has.
+    // Read by [`orderMoves`] to score a quiet and by the search's move loop to prune and
+    // to modulate the LMR reduction, so both consume one definition of "how good has this
+    // quiet been here".
+    [[nodiscard]] int quietHistory(Color stm, const ContHistContext& ctx, Move move,
+                                   int movedPiece) const;
+
+    // Capture-history score of `move` (which must be a capture) in
+    // [-MAX_HISTORY, MAX_HISTORY]: how often taking on this square with this piece, from
+    // this victim, has produced a cutoff. Refines the SEE/MVV-LVA capture order, which
+    // knows the material but not whether the capture actually works here. Returns 0 when
+    // capture history is disabled.
+    [[nodiscard]] int captureScore(const Board& board, Move move) const;
+
     // --- Update (cold-ish: once per quiet-move beta-cutoff) ---
 
     // Record a quiet-move fail-high at `ply`, remaining `depth`, for side `stm`:
@@ -100,15 +118,28 @@ public:
                            Move cutoff, const Move* quietsTried, int nTried,
                            const ContHistContext& ctx);
 
+    // Record a capture beta-cutoff at remaining `depth`: reward `cutoff` and penalise the
+    // captures in `[capturesTried, capturesTried + nTried)` that were searched first and
+    // failed to cut — the capture analogue of [`updateQuietCutoff`], with the same
+    // gravity bound. `board` is the node position (all moves still unmade). Killers,
+    // countermoves and the quiet tables are untouched: they exist for quiets only.
+    void updateCaptureCutoff(const Board& board, int depth, Move cutoff, const Move* capturesTried,
+                             int nTried);
+
 private:
-    static constexpr int NUM_COLORS  = 2;
-    static constexpr int NUM_SQUARES = 64;
-    static constexpr int NUM_PIECES  = 12; // piece-with-colour (WHITEPAWN..BLACKKING)
-    static constexpr int NUM_KILLERS = 2;
+    static constexpr int NUM_COLORS      = 2;
+    static constexpr int NUM_SQUARES     = 64;
+    static constexpr int NUM_PIECES      = 12; // piece-with-colour (WHITEPAWN..BLACKKING)
+    static constexpr int NUM_PIECE_TYPES = 6;  // victim type (PAWN..KING)
+    static constexpr int NUM_KILLERS     = 2;
 
     // Flat countermove slot for the move that reached this position, or -1 when there
     // is no usable previous move (no prev, or no piece on its target square).
     static int counterIndex(const Board& board, Move prevMove);
+
+    // Victim type (0-5) of capture `move`: the piece on its target square, or PAWN for an
+    // en-passant capture (where the target square is empty).
+    static int victimIndex(const Board& board, Move move);
 
     // Continuation-history table: a saturating score indexed by the prior move's
     // (piece, to) and the current move's (piece, to). ~1.13 MB, so it is heap-owned via
@@ -123,14 +154,16 @@ private:
     void updateContinuation(const ContHistContext& ctx, int movedPiece, int to, int bonus);
 
     int16_t                    butterfly_[NUM_COLORS][NUM_SQUARES][NUM_SQUARES];
+    int16_t                    capture_[NUM_PIECES][NUM_SQUARES][NUM_PIECE_TYPES];
     Move                       killers_[MAX_PLY][NUM_KILLERS];
     Move                       counters_[NUM_PIECES * NUM_SQUARES];
     std::unique_ptr<ContTable> continuation_;
 
-    bool useKillers_  = true; // per-signal on/off for A/B isolation (see setEnabled)
-    bool useHistory_  = true;
-    bool useCounter_  = true;
-    bool useContHist_ = true;
+    bool useKillers_     = true; // per-signal on/off for A/B isolation (see setEnabled)
+    bool useHistory_     = true;
+    bool useCounter_     = true;
+    bool useContHist_    = true;
+    bool useCaptureHist_ = true;
 };
 
 } // namespace engine

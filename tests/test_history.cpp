@@ -17,7 +17,12 @@ using namespace chess;
 namespace {
 
 const char* STARTPOS = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-const Move  NONE     = Move(Move::NO_MOVE);
+// A white bishop (a1) and rook (d1) both capture an undefended black knight on d4. The
+// table is keyed by (moving piece, target square, victim), so these are two distinct
+// buckets; MVV-LVA prefers the cheaper attacker (the bishop), which lets a test show
+// capture history overriding that default.
+const char* TWO_ATTACKERS = "4k3/8/8/8/3n4/8/8/B2RK3 w - - 0 1";
+const Move  NONE          = Move(Move::NO_MOVE);
 
 Move parse(const Board& b, const char* s) {
     const Move m = uci::uciToMove(b, s);
@@ -186,7 +191,8 @@ TEST_CASE("continuation history is keyed by the recent-move context") {
 
 TEST_CASE("continuation history is silent when disabled") {
     History h;
-    h.setEnabled(/*killers=*/true, /*history=*/true, /*countermove=*/true, /*contHist=*/false);
+    h.setEnabled(/*killers=*/true, /*history=*/true, /*countermove=*/true, /*contHist=*/false,
+                 /*captureHist=*/true);
     Board      b(STARTPOS);
     const Move cut = parse(b, "e2e3");
     const auto ctx = ctx1(/*piece=*/1, /*to=*/20);
@@ -195,11 +201,86 @@ TEST_CASE("continuation history is silent when disabled") {
     CHECK(h.continuationScore(ctx, pieceIndex(b, cut), cut.to().index()) == 0);
 }
 
+TEST_CASE("quietHistory is the butterfly + continuation sum move ordering uses") {
+    History    h;
+    Board      b(STARTPOS);
+    const Move cut  = parse(b, "e2e3");
+    const Move fail = parse(b, "d2d3");
+    const auto ctx  = ctx1(/*piece=*/1, /*to=*/20);
+
+    cutoff(h, b, cut, NONE, {fail}, /*depth=*/6, ctx);
+
+    for (const Move m : {cut, fail}) {
+        const int piece = pieceIndex(b, m);
+        CHECK(h.quietHistory(Color::WHITE, ctx, m, piece) ==
+              h.quietScore(Color::WHITE, m) + h.continuationScore(ctx, piece, m.to().index()));
+    }
+    // The rewarded quiet outscores the penalised one — the sign the search prunes on.
+    CHECK(h.quietHistory(Color::WHITE, ctx, cut, pieceIndex(b, cut)) >
+          h.quietHistory(Color::WHITE, ctx, fail, pieceIndex(b, fail)));
+}
+
+TEST_CASE("quietHistory is silent when both quiet signals are disabled") {
+    History h;
+    h.setEnabled(/*killers=*/true, /*history=*/false, /*countermove=*/true, /*contHist=*/false,
+                 /*captureHist=*/true);
+    Board      b(STARTPOS);
+    const Move cut = parse(b, "e2e3");
+    const auto ctx = ctx1(/*piece=*/1, /*to=*/20);
+
+    cutoff(h, b, cut, NONE, {}, /*depth=*/6, ctx);
+    CHECK(h.quietHistory(Color::WHITE, ctx, cut, pieceIndex(b, cut)) == 0);
+}
+
+TEST_CASE("capture history rewards the cutoff capture and penalises those tried first") {
+    History    h;
+    Board      b(TWO_ATTACKERS);
+    const Move cut  = parse(b, "d1d4"); // rook takes: the cutoff
+    const Move fail = parse(b, "a1d4"); // bishop takes: tried first, failed to cut
+
+    Move tried[1] = {fail};
+    h.updateCaptureCutoff(b, /*depth=*/20, cut, tried, 1);
+
+    CHECK(h.captureScore(b, cut) > 0);
+    CHECK(h.captureScore(b, fail) < 0);
+
+    // MVV-LVA alone would order the cheaper attacker (the bishop) first; a rewarded rook
+    // capture and a penalised bishop capture flip that.
+    Movelist ml;
+    movegen::legalmoves(ml, b);
+    orderMoves(b, ml, NONE, h, /*ply=*/0, /*prevMove=*/NONE, ContHistContext{});
+    CHECK(rankOf(ml, cut) < rankOf(ml, fail));
+}
+
+TEST_CASE("capture history is keyed by the moving piece, target square and victim") {
+    History    h;
+    Board      b(TWO_ATTACKERS);
+    const Move rook   = parse(b, "d1d4");
+    const Move bishop = parse(b, "a1d4");
+
+    h.updateCaptureCutoff(b, /*depth=*/20, rook, nullptr, 0);
+
+    CHECK(h.captureScore(b, rook) > 0);
+    CHECK(h.captureScore(b, bishop) == 0); // different moving piece -> different bucket
+}
+
+TEST_CASE("capture history is silent when disabled") {
+    History h;
+    h.setEnabled(/*killers=*/true, /*history=*/true, /*countermove=*/true, /*contHist=*/true,
+                 /*captureHist=*/false);
+    Board      b(TWO_ATTACKERS);
+    const Move cut = parse(b, "d1d4");
+
+    h.updateCaptureCutoff(b, /*depth=*/20, cut, nullptr, 0);
+    CHECK(h.captureScore(b, cut) == 0); // neither updated nor reported
+}
+
 TEST_CASE("a continuation-history quiet floats above a neutral quiet") {
     History h;
     // Isolate continuation history: turn off the other quiet signals so only it can
     // move a quiet's rank.
-    h.setEnabled(/*killers=*/false, /*history=*/false, /*countermove=*/false, /*contHist=*/true);
+    h.setEnabled(/*killers=*/false, /*history=*/false, /*countermove=*/false, /*contHist=*/true,
+                 /*captureHist=*/true);
     Board      b(STARTPOS);
     const auto ctx  = ctx1(/*piece=*/3, /*to=*/30);
     const Move good = parse(b, "e2e3");

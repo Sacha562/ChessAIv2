@@ -94,10 +94,19 @@ material-only eval but +7 ± 8 Elo once the full HCE eval landed), and the pruni
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
 `1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `15`, the initial aspiration half-window in
-cp), plus the **SPSA-tunable forward-pruning
+cp), the **Phase 1d history-selectivity toggles** `UseHistPrune` / `UseHistLmr` and
+`UseCorrHist` ([correction history](corrhist.hpp.md) — the learned pawn-structure static-eval
+adjustment) and `UseCapHist` ([capture history](history.hpp.md#historycapturescore) in the
+capture order; all default `1`), the **Phase 1d whole-node pruning toggles** `UseRazoring`
+and `UseProbCut` (both default **`0`** — wired but inert until an SPRT accepts them), plus
+the **SPSA-tunable forward-pruning
 margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
-`NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, and the **Phase 1c
-singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin` — all exposed
+`NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, the **Phase 1c
+singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, and the
+**Phase 1d history knobs** `HistPruneMargin` (default `2048`) / `HistLmrDiv` (default
+`8192`), which are in **history-score units** (the quiet band is `±49152`), not
+centipawns, and the **Phase 1d whole-node pruning margins** `RazorBase` (`180`) /
+`RazorMargin` (`160`) / `ProbCutMinDepth` (`5`) / `ProbCutMargin` (`180`) in cp — all exposed
 as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
 the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eval, **+82 ±
 20 Elo**), then **re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the

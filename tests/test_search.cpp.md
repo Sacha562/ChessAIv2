@@ -1,7 +1,8 @@
 # Test: `test_search.cpp`
 
-Functional tests for the **Phase 1c main-search extensions** — specifically
-[singular extensions](../src/search.hpp.md#searchersearch) — exercised through the public
+Functional tests for the **Phase 1c main-search extensions** —
+[singular extensions](../src/search.hpp.md#searchersearch) — and the **Phase 1d whole-node
+forward pruning** (razoring, ProbCut), exercised through the public
 [`Searcher`](../src/search.hpp.md#class-searcher). Singular extensions change how the
 search *allocates depth*, not the result on a clear tactic, so there is no table to assert
 against directly; the suite validates them behaviourally instead:
@@ -66,3 +67,23 @@ and its exclusion plumbing stay correct under heavy use.
 
 Two identical depth-9 singular searches of the same position return the same move — the
 extension path introduces no non-determinism.
+
+### `razoring and ProbCut leave a forced tactic intact`
+
+Both Phase 1d whole-node prunes ship **off**; turning them on reshapes the tree but must
+not change the verdict. The hanging-queen and free-knight positions return the same best
+move with `UseRazoring`/`UseProbCut` on as with the shipped defaults.
+
+### `an eager razoring gate still wins the hanging piece`
+
+With `RazorBase = 600` and `RazorMargin = 400` the razoring gate fires on almost every
+shallow node; the q-search verification must still refuse to prune a winning capture, so
+`e4d5` survives in both positions. This is the test that would catch a razoring layer that
+returns a fail-low score without verifying it.
+
+### `an eager ProbCut still wins the hanging piece`
+
+With `ProbCutMinDepth = 3` and `ProbCutMargin = 50` the shallow capture search runs
+constantly; the forced capture must still be the move played — a guard on the SEE
+threshold, the q-search screen, the reduced-depth verification, and the `BOUND_LOWER`
+store that follows a successful cut.

@@ -65,13 +65,20 @@ node's continuation context `contCtx`), then each move is scored once:
 
 - TT move → `SCORE_TT`;
 - captures → `SCORE_GOOD_CAP` / `SCORE_BAD_CAP` (chosen by
-  [`seeGE`](see.hpp.md#seege)`(m, 0)`) plus their MVV-LVA;
+  [`seeGE`](see.hpp.md#seege)`(m, 0)`) plus their MVV-LVA **plus
+  [`hist.captureScore`](history.hpp.md#historycapturescore) `/ CAP_HIST_DIV`** — the
+  capture-history refinement (Phase 1d). Dividing by `CAP_HIST_DIV` (4) keeps MVV-LVA's
+  victim classes intact while letting a capture that keeps working (or keeps failing)
+  move within and just across them; a `static_assert` pins the widened capture score
+  inside its bucket;
 - a quiet matching killer 1 / killer 2 / the countermove → `SCORE_KILLER1` /
   `SCORE_KILLER2` / `SCORE_COUNTER`;
-- any other quiet → `SCORE_QUIET` plus its
-  [`hist.quietScore`](history.hpp.md#historyquietscore) **and** its
-  [`hist.continuationScore`](history.hpp.md#historycontinuationscore)`(contCtx, …)` — the
-  two history signals summed, together in `±QUIET_BAND`.
+- any other quiet → `SCORE_QUIET` plus
+  [`hist.quietHistory`](history.hpp.md#historyquiethistory)`(stm, contCtx, move,
+  movedPiece)` — the butterfly and continuation signals summed, together in `±QUIET_BAND`.
+  That one query is also what [`search`](search.hpp.md#searchersearch)'s move loop reads
+  for history pruning and the history-modulated LMR, so ordering and selectivity share a
+  single definition of a quiet's history.
 
 A stable insertion sort by descending score then reorders the list. Because captures
 are classified before the killer/counter checks, a stored killer that happens to be a
@@ -90,8 +97,8 @@ for quiet cutoffs).
 | `contCtx` | `const ContHistContext&` | Recent-move context (from [`search`](search.hpp.md#searchersearch)'s stack) keying the continuation-history lookup; a default (empty) context contributes nothing. |
 
 **Side Effects:** reorders `moves`. Calls `seeGE` once per capture; for each quiet reads
-`hist.continuationScore` (which reads `board.at(move.from())`); reads (never writes)
-`hist`.
+`hist.quietHistory` (with the moved piece taken from `board.at(move.from())`); reads
+(never writes) `hist`.
 
 ### `orderCaptures`
 

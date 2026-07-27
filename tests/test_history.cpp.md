@@ -4,14 +4,19 @@ Unit tests for the [quiet-move ordering heuristics](../src/history.hpp.md)
 (`src/history.*`). Strategy: drive a `History` through its public update API
 ([`updateQuietCutoff`](../src/history.hpp.md#historyupdatequietcutoff)) and assert the
 observable contract — killer LIFO, history bonus/malus signs, the saturating gravity
-bound, countermove round-trips, and **continuation-history** reward/malus + context
-keying — then end-to-end checks that these signals actually move a quiet's rank in
+bound, countermove round-trips, **continuation-history** reward/malus + context keying, and
+**capture-history** reward/malus + bucket keying — then end-to-end checks that these
+signals actually move a move's rank in
 [`orderMoves`](../src/movepick.hpp.md#ordermoves).
 
 A local `cutoff()` helper records a quiet fail-high at ply 0 for the side to move
 (taking an optional [`ContHistContext`](../src/history.hpp.md#struct-conthistcontext)),
 `rankOf()` finds a move's position in an ordered list, `pieceIndex()` returns a move's
 colour+type index, and `ctx1()` builds a one-ply continuation context from raw indices.
+The capture-history cases use a purpose-built FEN (`TWO_ATTACKERS`) where a bishop and a
+rook both capture the same undefended knight, so the two captures land in different
+buckets and MVV-LVA's preference for the cheaper attacker is what capture history has to
+override.
 
 ## Test Code
 
@@ -86,6 +91,39 @@ different prior move → score `0`) and from an empty context (no prior move →
 
 With `UseContHist` off ([`setEnabled`](../src/history.hpp.md#historysetenabled)),
 `continuationScore` returns `0` even after a cutoff that would otherwise reward it.
+
+### `capture history rewards the cutoff capture and penalises those tried first`
+
+A rook capture that cuts and a bishop capture of the same knight that failed first end up
+with positive and negative [`captureScore`](../src/history.hpp.md#historycapturescore),
+and [`orderMoves`](../src/movepick.hpp.md#ordermoves) then ranks the rook capture **above**
+the bishop one — the opposite of the MVV-LVA default (cheapest attacker first), which is
+the whole point of the signal.
+
+### `capture history is keyed by the moving piece, target square and victim`
+
+Rewarding the rook's capture leaves the bishop's capture of the same victim on the same
+square at zero: the moving piece is part of the key.
+
+### `capture history is silent when disabled`
+
+With `UseCapHist` off ([`setEnabled`](../src/history.hpp.md#historysetenabled)) the update
+is skipped **and** the query returns `0`.
+
+### `quietHistory is the butterfly + continuation sum move ordering uses`
+
+[`quietHistory`](../src/history.hpp.md#historyquiethistory) equals
+`quietScore + continuationScore` for both a rewarded and a penalised quiet, and ranks the
+rewarded one above the penalised one. This is the query the search's **history pruning**
+and **history-modulated LMR** read (Phase 1d), so the identity pins ordering and
+selectivity to the same number.
+
+### `quietHistory is silent when both quiet signals are disabled`
+
+With `UseHistory` **and** `UseContHist` off
+([`setEnabled`](../src/history.hpp.md#historysetenabled)), `quietHistory` returns `0`
+after a cutoff that would otherwise reward the move — so a disabled-history binary can
+never history-prune.
 
 ### `a continuation-history quiet floats above a neutral quiet`
 

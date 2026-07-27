@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include "corrhist.hpp"
 #include "history.hpp"
 #include "types.hpp"
 
@@ -68,6 +69,20 @@ struct Tunables {
     bool useSingular   = true; // singular extensions (Phase 1c)
     bool useAspiration = true; // aspiration windows at the root
 
+    // Phase 1d history-driven selectivity: the same butterfly + continuation score that
+    // orders quiets also decides which late quiets to skip and how far to reduce them.
+    bool useHistPrune = true; // history pruning of late quiets
+    bool useHistLmr   = true; // history-modulated LMR reduction
+    bool useCorrHist  = true; // pawn-structure correction of the static eval
+    bool useCaptureHist =
+        true; // capture history: cutoff memory refining the SEE/MVV-LVA capture order
+
+    // Phase 1d whole-node forward pruning. Both are classically marginal (PLAN.md §15
+    // calls them tune-last extras), so they ship **off** until an SPRT says otherwise —
+    // wired, tunable, and inert, which also keeps the bench signature stable.
+    bool useRazoring = false; // drop to q-search when the eval is far below alpha
+    bool useProbCut  = false; // shallow capture search predicting a deep fail-high
+
     // Aspiration: initial half-window (cp) around the previous iteration's score.
     Value aspirationDelta = 15;
 
@@ -83,6 +98,17 @@ struct Tunables {
     Value futMargin  = 86;  // futility margin per remaining ply (cp)
     Value futBase    = 77;  // futility base margin (cp)
     int   lmpBase    = 4;   // late-move-pruning quiet-count base (count = base + depth^2)
+
+    // Phase 1d history-selectivity knobs, in history-score units (the quiet band is
+    // +/-(1 + CONT_PLIES) * MAX_HISTORY = +/-49152).
+    int histPruneMargin = 2048; // skip a late quiet scoring below -margin * depth
+    int histLmrDiv      = 8192; // history score per one ply of LMR adjustment (>= 1)
+
+    // Phase 1d whole-node pruning margins (cp).
+    Value razorBase       = 180; // razoring base margin
+    Value razorMargin     = 160; // razoring margin per remaining ply
+    int   probCutMinDepth = 5;   // only attempt ProbCut at/above this depth
+    Value probCutMargin   = 180; // ProbCut searches against beta + this margin
 
     // Singular-extension knobs (Phase 1c). The TT move is verified singular by a
     // reduced-depth search (excluding it) against a lowered beta; if every alternative
@@ -111,10 +137,17 @@ public:
     uint64_t nodes() const { return nodes_; }
 
 private:
-    Value   search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
-                   Move excluded = Move(Move::NO_MOVE));
-    Value   aspirationSearch(Board& board, int depth, Value prevScore);
-    Value   qsearch(Board& board, Value alpha, Value beta, int ply);
+    Value search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
+                 Move excluded = Move(Move::NO_MOVE));
+    Value aspirationSearch(Board& board, int depth, Value prevScore);
+    Value qsearch(Board& board, Value alpha, Value beta, int ply);
+
+    // Static eval of `board` as the search reasons about it: the raw evaluation plus the
+    // correction-history adjustment for this pawn structure (or `raw` unchanged when
+    // correction history is off). `raw` is passed in so a caller can reuse a TT-cached
+    // static eval instead of re-evaluating.
+    Value correctedEval(const Board& board, Value raw) const;
+
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
     int64_t elapsedMs() const;
@@ -131,6 +164,7 @@ private:
     Tunables            tp_;
     uint64_t            nodes_ = 0;
     History             history_;                // quiet-move ordering heuristics (per search)
+    CorrectionHistory   corrHist_;               // learned static-eval correction (per search)
     Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
     uint8_t reductions_[LMR_DIM][LMR_DIM]{};     // LMR reduction table (see buildReductions)
 
