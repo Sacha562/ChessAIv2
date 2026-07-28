@@ -71,9 +71,16 @@ struct Tunables {
 
     // Phase 1d history-driven selectivity: the same butterfly + continuation score that
     // orders quiets also decides which late quiets to skip and how far to reduce them.
-    bool useHistPrune = true; // history pruning of late quiets
-    bool useHistLmr   = true; // history-modulated LMR reduction
-    bool useCorrHist  = true; // pawn-structure correction of the static eval
+    // Each was A/B'd alone against every Phase 1d toggle off, which reproduces v0.1c
+    // node-for-node, so the numbers below are Elo vs the 0.1c release @ STC 10+0.1.
+    bool useHistPrune = true; // history pruning of late quiets. +1.5 +/- 4.9 Elo (50.22%,
+                              // 10000 games) at histPruneMargin 2048 -- neutral, the seed
+                              // barely fires; re-testing at a tighter margin.
+    bool useHistLmr = true;   // history-modulated LMR reduction. **+17.7 +/- 9.2 Elo**
+                              // (52.54%, 2912 games, SPRT [0,5] accepted).
+    bool useCorrHist = true;  // pawn-structure correction of the static eval. **+27.6 +/-
+                              // 11.3 Elo** (53.97%, 1953 games, SPRT [0,5] accepted) --
+                              // the biggest Phase 1d gainer so far.
     bool useCaptureHist =
         true; // capture history: cutoff memory refining the SEE/MVV-LVA capture order
 

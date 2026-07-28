@@ -109,9 +109,9 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
 | `useSingular` | `bool` | `true` | Enable singular extensions (Phase 1c) (`UseSingular`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
-| `useHistPrune` | `bool` | `true` | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). |
-| `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). |
-| `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. |
+| `useHistPrune` | `bool` | `true` | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). **+1.5 ± 4.9 Elo** — neutral at the `histPruneMargin = 2048` seed (see the Phase 1d rationale below). |
+| `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). **+17.7 ± 9.2 Elo** vs 0.1c. |
+| `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. **+27.6 ± 11.3 Elo** vs 0.1c. |
 | `useCaptureHist` | `bool` | `true` | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. |
 | `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
 | `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
@@ -161,6 +161,25 @@ are denominated in **history-score units**, not centipawns: the quiet score they
 the butterfly + continuation sum, which lives in `±(1 + CONT_PLIES) · MAX_HISTORY`
 (`±49152`). Both are seeds pending an SPSA pass; the depth gate `HIST_PRUNE_MAX_DEPTH` and
 the `HIST_LMR_MAX_PLIES` cap stay `constexpr`.
+
+**Default rationale (Phase 1d, A/B @ STC 10+0.1, UHO book).** Every Phase 1d feature was
+measured **alone**, against a run with *all* Phase 1d toggles off — a configuration that
+reproduces release **v0.1c node-for-node** (1,947,551 nodes over four positions at depth
+12) — so each number below is Elo **vs the 0.1c release**, measured on one binary through
+UCI options rather than two builds:
+
+| Feature | Result | Verdict |
+|---|---|---|
+| `UseCorrHist` | **+27.6 ± 11.3** Elo (53.97%, 1953 games) | SPRT `[0, 5]` **accepted** — the biggest Phase 1d gainer |
+| `UseHistLmr` | **+17.7 ± 9.2** Elo (52.54%, 2912 games) | SPRT `[0, 5]` **accepted** |
+| `UseHistPrune` | **+1.5 ± 4.9** Elo (50.22%, 10000 games) | **no verdict** — neutral at the `histPruneMargin = 2048` seed, which barely fires; being re-tested at `1024` |
+
+Because each was measured in isolation, the numbers are **not additive**: they overlap
+(history-LMR and history pruning read the same score; correction history moves the eval
+that futility and RFP gate on), so the stack total is settled by a cumulative test, not by
+summing the column. Correction history in particular is expected to *under*-read here —
+`rfpMargin` / `futMargin` / `futBase` / `nmpEvalDiv` were SPSA-tuned at `87fa8a1` against
+the **uncorrected** eval's error distribution, so a joint re-tune is the natural follow-up.
 
 The **Phase 1c knobs** (`useContHist`, and the singular set `useSingular` /
 `singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are new this phase; the
