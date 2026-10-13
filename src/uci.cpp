@@ -272,7 +272,7 @@ void Engine::loop() {
                       << "option name UseHistPrune type spin default 1 min 0 max 1\n"
                       << "option name UseHistLmr type spin default 1 min 0 max 1\n"
                       << "option name UseCorrHist type spin default 1 min 0 max 1\n"
-                      << "option name UseCapHist type spin default 1 min 0 max 1\n"
+                      << "option name UseCapHist type spin default 0 min 0 max 1\n"
                       << "option name UseRazoring type spin default 0 min 0 max 1\n"
                       << "option name UseProbCut type spin default 0 min 0 max 1\n"
                       << "option name AspirationDelta type spin default 15 min 1 max 500\n"

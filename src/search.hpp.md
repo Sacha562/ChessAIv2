@@ -112,7 +112,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useHistPrune` | `bool` | `true` | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). **+1.5 ± 4.9 Elo** — neutral at the `histPruneMargin = 2048` seed (see the Phase 1d rationale below). |
 | `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). **+17.7 ± 9.2 Elo** vs 0.1c. |
 | `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. **+27.6 ± 11.3 Elo** vs 0.1c. |
-| `useCaptureHist` | `bool` | `true` | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. |
+| `useCaptureHist` | `bool` | **`false`** | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. **+2.3 ± 5.7 Elo** — neutral, so it ships off (see the Phase 1d rationale below). |
 | `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
 | `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
@@ -173,6 +173,7 @@ UCI options rather than two builds:
 | `UseCorrHist` | **+27.6 ± 11.3** Elo (53.97%, 1953 games) | SPRT `[0, 5]` **accepted** — the biggest Phase 1d gainer |
 | `UseHistLmr` | **+17.7 ± 9.2** Elo (52.54%, 2912 games) | SPRT `[0, 5]` **accepted** |
 | `UseHistPrune` | **+1.5 ± 4.9** Elo (50.22%, 10000 games) | **no verdict** — neutral at the `histPruneMargin = 2048` seed, which barely fires; being re-tested at `1024` |
+| `UseCapHist` | **+2.3 ± 5.7** Elo (50.32%, 7399 games) | **neutral** — run cut short at 7399 of 10000 games with the interval straddling zero; ships **off** (wired, so it can be re-tested after NNUE) |
 
 Because each was measured in isolation, the numbers are **not additive**: they overlap
 (history-LMR and history pruning read the same score; correction history moves the eval
