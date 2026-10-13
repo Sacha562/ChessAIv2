@@ -109,7 +109,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCheckExt` | `bool` | `true` | Enable check extensions (`UseCheckExt`). |
 | `useSingular` | `bool` | `true` | Enable singular extensions (Phase 1c) (`UseSingular`). |
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
-| `useHistPrune` | `bool` | `true` | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). **+1.5 ± 4.9 Elo** — neutral at the `histPruneMargin = 2048` seed (see the Phase 1d rationale below). |
+| `useHistPrune` | `bool` | **`false`** | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). Neutral at both margins tried (`2048` and `1024`), so it ships off (see the Phase 1d rationale below). |
 | `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). **+17.7 ± 9.2 Elo** vs 0.1c. |
 | `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. **+27.6 ± 11.3 Elo** vs 0.1c. |
 | `useCaptureHist` | `bool` | **`false`** | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. **+2.3 ± 5.7 Elo** — neutral, so it ships off (see the Phase 1d rationale below). |
@@ -172,8 +172,12 @@ UCI options rather than two builds:
 |---|---|---|
 | `UseCorrHist` | **+27.6 ± 11.3** Elo (53.97%, 1953 games) | SPRT `[0, 5]` **accepted** — the biggest Phase 1d gainer |
 | `UseHistLmr` | **+17.7 ± 9.2** Elo (52.54%, 2912 games) | SPRT `[0, 5]` **accepted** |
-| `UseHistPrune` | **+1.5 ± 4.9** Elo (50.22%, 10000 games) | **no verdict** — neutral at the `histPruneMargin = 2048` seed, which barely fires; being re-tested at `1024` |
+| `UseHistPrune` | **+1.5 ± 4.9** Elo (50.22%, 10000 games) at `histPruneMargin = 2048`; **−0.7 ± 4.9** (49.90%, 10000 games) at `1024`, measured on top of correction history + history-LMR | **neutral** at both margins — ships **off** (history-LMR already consumes the same score) |
 | `UseCapHist` | **+2.3 ± 5.7** Elo (50.32%, 7399 games) | **neutral** — run cut short at 7399 of 10000 games with the interval straddling zero; ships **off** (wired, so it can be re-tested after NNUE) |
+
+The **shipping stack** — correction history + history-LMR, with history pruning and capture
+history off — measured **+32.5 ± 11.6 Elo** vs the all-off (== 0.1c) configuration (54.66%,
+1576 games, SPRT `[0, 5]` accepted).
 
 Because each was measured in isolation, the numbers are **not additive**: they overlap
 (history-LMR and history pruning read the same score; correction history moves the eval

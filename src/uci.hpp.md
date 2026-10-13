@@ -94,9 +94,9 @@ material-only eval but +7 ± 8 Elo once the full HCE eval landed), and the pruni
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
 `1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `15`, the initial aspiration half-window in
-cp), the **Phase 1d history-selectivity toggles** `UseHistPrune` / `UseHistLmr` and
-`UseCorrHist` ([correction history](corrhist.hpp.md) — the learned pawn-structure static-eval
-adjustment), all default `1`, and `UseCapHist` ([capture history](history.hpp.md#historycapturescore)
+cp), the **Phase 1d history-selectivity toggles** `UseHistLmr` and `UseCorrHist`
+([correction history](corrhist.hpp.md) — the learned pawn-structure static-eval adjustment),
+both default `1`, `UseHistPrune` (default **`0`** — A/B-neutral at margins 2048 and 1024), and `UseCapHist` ([capture history](history.hpp.md#historycapturescore)
 in the capture order; default **`0`** — A/B-neutral, +2.3 ± 5.7 Elo), the **Phase 1d whole-node pruning toggles** `UseRazoring`
 and `UseProbCut` (both default **`0`** — wired but inert until an SPRT accepts them), plus
 the **SPSA-tunable forward-pruning

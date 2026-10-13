@@ -73,9 +73,9 @@ struct Tunables {
     // orders quiets also decides which late quiets to skip and how far to reduce them.
     // Each was A/B'd alone against every Phase 1d toggle off, which reproduces v0.1c
     // node-for-node, so the numbers below are Elo vs the 0.1c release @ STC 10+0.1.
-    bool useHistPrune = true;    // history pruning of late quiets. +1.5 +/- 4.9 Elo (50.22%,
-                                 // 10000 games) at histPruneMargin 2048 -- neutral, the seed
-                                 // barely fires; re-testing at a tighter margin.
+    bool useHistPrune = false;   // history pruning of late quiets. Neutral at both margins
+                                 // tried: +1.5 +/- 4.9 Elo at 2048, -0.7 +/- 4.9 at 1024
+                                 // (10000 games each) -- so it ships off.
     bool useHistLmr = true;      // history-modulated LMR reduction. **+17.7 +/- 9.2 Elo**
                                  // (52.54%, 2912 games, SPRT [0,5] accepted).
     bool useCorrHist = true;     // pawn-structure correction of the static eval. **+27.6 +/-

@@ -269,7 +269,7 @@ void Engine::loop() {
                       << "option name UseCheckExt type spin default 1 min 0 max 1\n"
                       << "option name UseSingular type spin default 1 min 0 max 1\n"
                       << "option name UseAspiration type spin default 1 min 0 max 1\n"
-                      << "option name UseHistPrune type spin default 1 min 0 max 1\n"
+                      << "option name UseHistPrune type spin default 0 min 0 max 1\n"
                       << "option name UseHistLmr type spin default 1 min 0 max 1\n"
                       << "option name UseCorrHist type spin default 1 min 0 max 1\n"
                       << "option name UseCapHist type spin default 0 min 0 max 1\n"
