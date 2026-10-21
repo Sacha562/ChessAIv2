@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, ingest, reports, scoring, selector
+from . import config, db, ingest, prep, reports, scoring, selector
 from .worker import Worker, reset_running
 
 STATIC_DIR = config.PACKAGE_DIR / "static"
@@ -64,6 +64,31 @@ class CandidateRef(BaseModel):
     move: str
 
 
+class PrepBody(BaseModel):
+    """Prepare ``move`` (UCI or SAN) after ``moves`` against ``opponent``."""
+
+    opponent: str
+    moves: list[str]
+    move: str
+    note: str | None = None
+
+
+class PrepLineBody(BaseModel):
+    """Prepare every move of ``color`` in ``line`` (UCI or SAN from the start)."""
+
+    opponent: str
+    line: list[str]
+    color: str
+    note: str | None = None
+
+
+class PrepRef(BaseModel):
+    """Identify one prep entry by opponent and the position's move list."""
+
+    opponent: str
+    moves: list[str]
+
+
 class AnalyseBody(BaseModel):
     """Force (re-)analysis of the position after ``moves``."""
 
@@ -90,6 +115,17 @@ def _parse_move(board: chess.Board, text: str) -> chess.Move:
         return board.parse_san(text)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=f"not a legal move: {text}") from error
+
+
+def _parse_line(tokens: list[str]) -> tuple[str, ...]:
+    """Turn UCI or SAN tokens from the start position into UCI moves (400 on error)."""
+    board = chess.Board()
+    line = []
+    for token in tokens:
+        move = _parse_move(board, token)
+        board.push(move)
+        line.append(move.uci())
+    return tuple(line)
 
 
 def _moves_param(moves: str) -> tuple[str, ...]:
@@ -243,6 +279,39 @@ def create_app(static: config.StaticConfig, start_worker: bool = True) -> FastAP
                        ingest.PRIORITY_MANUAL, fen=board.fen(), force=True)
             conn.commit()
         worker.wake()
+        return {"ok": True}
+
+    @app.get("/api/prep")
+    def get_prep(opponent: str = "") -> list[dict]:
+        with db.session(static.db_path) as conn:
+            return prep.list_prep(conn, opponent.lower() or None)
+
+    @app.post("/api/prep")
+    def add_prep(body: PrepBody) -> dict:
+        board = _board(body.moves)
+        move = _parse_move(board, body.move)
+        with db.session(static.db_path) as conn:
+            prep.set_prep(conn, body.opponent.lower(), tuple(body.moves), move.uci(), body.note)
+            conn.commit()
+        return {"move": move.uci(), "san": board.san(move)}
+
+    @app.post("/api/prep/line")
+    def add_prep_line(body: PrepLineBody) -> dict:
+        line = _parse_line(body.line)
+        color = chess.WHITE if body.color == "white" else chess.BLACK
+        with db.session(static.db_path) as conn:
+            count = prep.set_prep_line(conn, body.opponent.lower(), line, color, body.note)
+            conn.commit()
+        return {"prepared": count, "line": list(line)}
+
+    @app.delete("/api/prep")
+    def delete_prep(body: PrepRef) -> dict:
+        _board(body.moves)
+        with db.session(static.db_path) as conn:
+            removed = prep.remove_prep(conn, body.opponent.lower(), tuple(body.moves))
+            conn.commit()
+        if not removed:
+            raise HTTPException(status_code=404, detail="no prep for that position")
         return {"ok": True}
 
     @app.post("/api/ingest")

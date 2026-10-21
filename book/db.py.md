@@ -29,7 +29,8 @@ worker writes.
 | `candidates` | (`key`, `move`) | Playable book moves: `tier` (99 = outside every tier), `source` (`engine` = MultiPV, `ours` = a move we played, evaluated with searchmoves, `manual` = added on the dashboard), Stockfish `sf_cp` / `sf_mate` / `sf_expected` / `sf_depth`, `enabled`, `added_at`. |
 | `analysis_queue` | `id`; unique (`kind`, `target`) | Jobs: `kind` ∈ `candidates`, `widen` (target = position key as text), `signal` (target = game id); `fen`, `priority` (lower runs first), `status` ∈ `queued`/`running`/`done`/`failed`, `error`, timestamps. |
 | `signal_evals` | (`game_id`, `ply`) | Stockfish expected score for us at that ply ([scoring.py.md](scoring.py.md)). |
-| `book_events` | `id` | Every live decision the book took: `game_id`, `ply`, `key`, `move` (NULL on a miss), `source` ∈ `book`/`replay`/`miss`, `opponent`, `speed`, `created_at`. |
+| `book_events` | `id` | Every live decision the book took: `game_id`, `ply`, `key`, `move` (NULL on a miss), `source` ∈ `prep`/`book`/`replay`/`miss`, `opponent`, `speed`, `created_at`. |
+| `prep_moves` | (`opponent`, `key`) | Per-opponent prepared moves: UCI path `moves`, prepared `move`, `note`, `created_at` ([prep.py.md](prep.py.md)). |
 | `settings` | `name` | JSON-encoded overrides of [`DEFAULT_SETTINGS`](config.py.md#default_settings). |
 | `meta` | `name` | `last_created_at` (ingest cursor, lichess ms) and `last_ingest_at` (s). |
 

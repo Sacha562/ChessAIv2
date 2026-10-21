@@ -1,9 +1,10 @@
 """Choose the book move for one in-game request from lichess-bot.
 
-Order of precedence: (1) replay a won game against this opponent whose move
-list matches the current game so far; (2) inside the book horizon, Thompson-
-sample among the playable candidates of this position; (3) otherwise return no
-move so the engine searches. Every served move and every miss is logged to
+Order of precedence: (1) a prep move set for this opponent in this position;
+(2) replay a won game against this opponent whose move list matches the current
+game so far; (3) inside the book horizon, Thompson-sample among the playable
+candidates of this position; (4) otherwise return no move so the engine
+searches. Every served move and every miss is logged to
 ``book_events`` (the source of each game's book-exit ply), and a miss on an
 unanalysed position queues it for Stockfish. See [selector.py.md](selector.py.md).
 """
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 
 import chess
 
-from . import db, ingest, scoring, stats
+from . import db, ingest, prep, scoring, stats
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,10 @@ def choose(conn: sqlite3.Connection, request: Request, settings: dict,
     if board.turn != request.color:
         return Decision(None, "not_our_turn")
     key = db.position_key(board)
+    prepared = prep.prep_move(conn, request.opponent, key)
+    if prepared is not None and chess.Move.from_uci(prepared) in board.legal_moves:
+        _log(conn, request, key, prepared, "prep")
+        return Decision(prepared, "prep")
     if settings["replay_enabled"]:
         replay = replay_move(conn, request, settings)
         if replay is not None and chess.Move.from_uci(replay[0]) in board.legal_moves:

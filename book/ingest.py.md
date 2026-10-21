@@ -70,7 +70,7 @@ black).
 ### `exit_ply`
 
 Where the game left the book. Returns `(ply, source)`:
-- **`'served'`:** `book_events` has `book`/`replay` rows for the game. The exit is our first ply the book did not supply, or `n_plies` if it supplied every move.
+- **`'served'`:** `book_events` has `prep`/`book`/`replay` rows for the game. The exit is our first ply the book did not supply, or `n_plies` if it supplied every move.
 - **`'inferred'`:** no log (games from before the book existed, or the server was down). The exit is `min(max_book_ply, n_plies)`.
 
 The eval-signal window is measured from this ply ([scoring.py.md](scoring.py.md)).

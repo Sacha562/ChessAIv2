@@ -21,6 +21,7 @@ No network and no Stockfish are needed.
 - [../ingest.py.md](../ingest.py.md)
 - [../selector.py.md](../selector.py.md)
 - [../server.py.md](../server.py.md)
+- [../prep.py.md](../prep.py.md)
 - [../db.py.md](../db.py.md), [../config.py.md](../config.py.md)
 
 ## How to Build & Run
@@ -73,9 +74,20 @@ book/.venv/Scripts/python -m unittest book.tests.test_book
 - `test_not_our_turn`: a request on the opponent's move returns no move.
 - `test_opponent_losses_unlock_next_tier`: five losses with tier-0 `e4` against one opponent unlock tier 1 for that opponent only; a newcomer still gets tier 0.
 
+### `PrepTests`
+
+- `test_prep_beats_replay_and_book`: with a candidate and a replayable win both present, the prep move is played with source `prep`.
+- `test_prep_is_opponent_specific`: another opponent gets the normal book move.
+- `test_prep_ignores_horizon`: prep applies beyond `max_book_ply`.
+- `test_prep_line_sets_only_our_moves`: a Black line prepares only Black's moves; SAN rendering (`1.e4 d5 2.Ke2 dxe4`); removal.
+- `test_illegal_prep_rejected`: an illegal move raises `ValueError`.
+- `test_prep_counts_as_served_for_exit`: a `prep` event moves the book exit like a `book` event.
+
 ### `ServerTests`
 
 - `test_add_manual_candidate_and_read_position`: through the HTTP API:
   1. a SAN manual candidate (`Nf3`) is stored as UCI `g1f3`, source `manual`
   2. an illegal move answers 400
   3. the shim endpoint then serves the manual move
+  4. `POST /api/prep/line` with SAN (`e4 e5 f4 Ke7`, White) prepares `e2e4` and `f2f4`
+  5. the shim serves `f2f4` with source `prep` for that opponent, even at another speed

@@ -40,6 +40,9 @@ Pydantic request bodies:
 | `CandidateBody` | `moves`, `move` (UCI or SAN), `tier` (0–9, default 0) | `POST /api/candidates` |
 | `CandidatePatch` | `moves`, `move`, optional `enabled`, optional `tier` (0–9) | `PATCH /api/candidates` |
 | `CandidateRef` | `moves`, `move` | `DELETE /api/candidates` |
+| `PrepBody` | `opponent`, `moves`, `move` (UCI or SAN), `note` | `POST /api/prep` |
+| `PrepLineBody` | `opponent`, `line` (UCI or SAN from the start), `color`, `note` | `POST /api/prep/line` |
+| `PrepRef` | `opponent`, `moves` | `DELETE /api/prep` |
 | `AnalyseBody` | `moves`, `widen` | `POST /api/analyse` |
 
 Candidates are always identified by the move list of their position, never by
@@ -69,6 +72,10 @@ key, because the browser cannot hold 64-bit keys.
 | PATCH | `/api/candidates` | Sets `enabled` and/or `tier`. Setting a tier also marks the candidate `manual`, so re-analysis no longer changes it. |
 | DELETE | `/api/candidates` | Deletes a `manual` candidate; 400 for other sources (disable those instead). |
 | POST | `/api/analyse` | Forces a `candidates` or `widen` job for the position (priority 1). |
+| GET | `/api/prep?opponent=` | [`list_prep`](prep.py.md#list_prep) (all opponents when empty). |
+| POST | `/api/prep` | [`set_prep`](prep.py.md#set_prep): prepare one move in one position vs an opponent. Returns `{move, san}`; 400 when illegal. |
+| POST | `/api/prep/line` | [`set_prep_line`](prep.py.md#set_prep_line): prepare every `color` move of a line. Returns `{prepared, line}`. |
+| DELETE | `/api/prep` | [`remove_prep`](prep.py.md#remove_prep); 404 if none. |
 | POST | `/api/ingest` | Ingest now. |
 | GET | `/` and `/static/*` | Dashboard files from `book/static/`. |
 
@@ -82,9 +89,10 @@ background threads are not started; jobs queue up but nothing runs.
 
 **Returns:** `FastAPI`. `app.state.worker` exposes the worker.
 
-### `_board` / `_parse_move` / `_moves_param`
+### `_board` / `_parse_move` / `_parse_line` / `_moves_param`
 
 Request helpers:
+- `_parse_line` turns UCI or SAN tokens from the start position into UCI, answering 400 on the first illegal token.
 - `_board` replays a move list, answering 400 on an illegal move.
 - `_parse_move` accepts UCI or SAN, answering 400 if the move is not legal.
 - `_moves_param` splits the comma-separated `moves` query parameter.

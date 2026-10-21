@@ -65,6 +65,7 @@ For one opponent, returns a dict with:
 - **`games`:** the 50 most recent games, each with id, date, speed, color,
   result, status, exit ply and source, signal, and opening SAN (first 10 plies).
 - **`determinism`** and **`repeated_positions`**.
+- **`prep`:** this opponent's [prep entries](prep.py.md#list_prep).
 
 ### `_played_here`
 
@@ -86,6 +87,7 @@ The explorer's view of the position after `moves`, built for `opponent` and
 - **Analysis:** `analysis` (the `positions` row, or null) and `jobs` (queue rows
   for this key).
 - **`played`:** from [`_played_here`](#_played_here).
+- **`prep`:** the prepared UCI move for this opponent here, or null (always null in the pooled view).
 
 **Warnings:** raises `ValueError` on illegal moves. The server validates them
 first and answers 400.

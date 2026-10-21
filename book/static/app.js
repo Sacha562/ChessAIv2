@@ -175,6 +175,15 @@ async function renderOpponent(name) {
         <td class="num ${scoreClass(s.signal)}">${pct(s.signal)}</td><td class="num">${num(s.avg_exit_ply)}</td>
         <td><a href="${exploreLink([], d.opponent, s.speed)}">explore →</a></td></tr>`).join("")}
     </table></div>
+    <h2>Prep (forced moves vs this opponent, all speeds)</h2>
+    <div class="panel"><table id="prep-table">
+      <tr><th>Line (prepared move last)</th><th>Note</th><th></th></tr>
+      ${d.prep.length ? d.prep.map((p) => `<tr>
+        <td><a href="${exploreLink([...p.moves, p.move], d.opponent, "")}">${esc(p.san)}</a></td>
+        <td class="muted">${esc(p.note || "")}</td>
+        <td><button class="link" data-moves="${esc(p.moves.join(","))}">remove</button></td></tr>`).join("")
+        : '<tr><td colspan="3" class="muted">No prep. Set it from the explorer with this opponent selected.</td></tr>'}
+    </table></div>
     <h2>Most played lines (first ${6} plies)</h2>
     <div class="panel"><table>
       <tr><th>Speed</th><th>Color</th><th>Line</th><th class="num">Games</th><th class="num">Score</th><th class="num">Signal</th></tr>
@@ -194,6 +203,17 @@ async function renderOpponent(name) {
         <td class="num ${scoreClass(g.signal)}">${pct(g.signal)}</td>
         <td class="num" title="${esc(g.exit_source)}">${g.exit_ply}</td><td>${esc(g.opening)}</td></tr>`).join("")}
     </table></div>`;
+  document.getElementById("prep-table").onclick = async (event) => {
+    const btn = event.target.closest("button[data-moves]");
+    if (!btn) return;
+    try {
+      await api("/api/prep", { method: "DELETE", body: { opponent: d.opponent, moves: btn.dataset.moves.split(",").filter(Boolean) } });
+      toast("Prep removed");
+      route();
+    } catch (error) {
+      toast(`Error: ${error.message}`);
+    }
+  };
 }
 
 // ---------------------------------------------------------------- explorer
@@ -325,11 +345,19 @@ async function renderExplore(params) {
             <select id="add-tier">${[0, 1, 2, 3].map((t) => `<option value="${t}">tier ${t}</option>`).join("")}</select>
             <button class="primary" id="add">Add candidate</button>
           </div>
+          ${opponent ? `<div class="row">
+            <button id="prep-move" title="Always play the move selected above in this position against ${esc(opponent)}">Prep selected move vs ${esc(opponent)}</button>
+            <button id="prep-line-white" ${moves.length ? "" : "disabled"}>Prep this line as White</button>
+            <button id="prep-line-black" ${moves.length ? "" : "disabled"}>Prep this line as Black</button>
+          </div>` : ""}
         </div>
       </div>
       <div>
         <div class="muted">${opponent ? `Stats for <b>${esc(opponent)}</b> at ${esc(speed)} (other speeds weighted ${settings.settings.other_speed_weight})` : `Pooled view: all opponents at ${esc(speed)}`}
           · tier limit ${pos.tier_limit}${pos.all_exhausted ? ' · <span class="bad">all tiers exhausted</span>' : ""}</div>
+        ${pos.prep ? `<div class="panel" style="margin-top:8px">Prep vs <b>${esc(opponent)}</b>: always plays
+          <b>${esc((pos.legal.find((m) => m.move === pos.prep) || { san: pos.prep }).san)}</b> here (overrides replay and book).
+          <button class="link" id="prep-remove">remove</button></div>` : ""}
         <h2>Candidates</h2>
         <div class="panel"><table id="cand-table">
           <tr><th>Move</th><th class="num">Tier</th><th>Source</th><th class="num">SF</th><th class="num">SF exp.</th>
@@ -387,6 +415,17 @@ function wireExplorer(pos, moves, opponent, speed) {
     method: "POST",
     body: { moves, move: document.getElementById("add-move").value, tier: Number(document.getElementById("add-tier").value) },
   }, "Candidate added; Stockfish will evaluate it");
+  if (opponent) {
+    const prepLine = (color) => post("/api/prep/line", { method: "POST", body: { opponent, line: moves, color } },
+      `Prepared all ${color} moves of this line vs ${opponent}`);
+    document.getElementById("prep-move").onclick = () => post("/api/prep", {
+      method: "POST", body: { opponent, moves, move: document.getElementById("add-move").value },
+    }, `Prepared vs ${opponent}`);
+    document.getElementById("prep-line-white").onclick = () => prepLine("white");
+    document.getElementById("prep-line-black").onclick = () => prepLine("black");
+    const remove = document.getElementById("prep-remove");
+    if (remove) remove.onclick = () => post("/api/prep", { method: "DELETE", body: { opponent, moves } }, "Prep removed");
+  }
   document.getElementById("cand-table").onclick = (event) => {
     const btn = event.target.closest("button[data-act]");
     if (!btn) return;

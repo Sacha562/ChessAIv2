@@ -12,7 +12,7 @@ from pathlib import Path
 
 import chess
 
-from book import config, db, ingest, scoring, selector, stats
+from book import config, db, ingest, prep, scoring, selector, stats
 
 ACCOUNT = "SmikkelBot"
 
@@ -226,6 +226,53 @@ class SelectorTests(DbTestCase):
         self.assertEqual(pooled.tier_limit, 0)
 
 
+class PrepTests(DbTestCase):
+    def request(self, moves: tuple[str, ...], color: chess.Color = chess.WHITE,
+                opponent: str = "rivalbot") -> selector.Request:
+        return selector.Request("live", moves, color, opponent, "blitz")
+
+    def test_prep_beats_replay_and_book(self) -> None:
+        self.add_candidate((), "d2d4", 0, 0.55)
+        self.store(raw_game("won", "d4 e5", True, "white"))
+        prep.set_prep(self.conn, "rivalbot", (), "e2e4")
+        decision = selector.choose(self.conn, self.request(()), self.settings, random.Random(1))
+        self.assertEqual((decision.move, decision.source), ("e2e4", "prep"))
+
+    def test_prep_is_opponent_specific(self) -> None:
+        self.add_candidate((), "d2d4", 0, 0.55)
+        prep.set_prep(self.conn, "rivalbot", (), "e2e4")
+        decision = selector.choose(self.conn, self.request((), opponent="someone"), self.settings,
+                                   random.Random(1))
+        self.assertEqual(decision.move, "d2d4")
+
+    def test_prep_ignores_horizon(self) -> None:
+        moves = ("g1f3", "g8f6", "f3g1", "f6g8") * 10
+        prep.set_prep(self.conn, "rivalbot", moves, "e2e4")
+        decision = selector.choose(self.conn, self.request(moves), self.settings, random.Random(1))
+        self.assertEqual(decision.source, "prep")
+
+    def test_prep_line_sets_only_our_moves(self) -> None:
+        line = ("e2e4", "d7d5", "e1e2", "d5e4")
+        self.assertEqual(prep.set_prep_line(self.conn, "rivalbot", line, chess.BLACK), 2)
+        entries = prep.list_prep(self.conn, "rivalbot")
+        self.assertEqual([e["move"] for e in entries], ["d7d5", "d5e4"])
+        self.assertEqual(entries[-1]["san"], "1.e4 d5 2.Ke2 dxe4")
+        self.assertTrue(prep.remove_prep(self.conn, "rivalbot", ("e2e4",)))
+        self.assertEqual(len(prep.list_prep(self.conn, "rivalbot")), 1)
+
+    def test_illegal_prep_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            prep.set_prep(self.conn, "rivalbot", (), "e2e5")
+
+    def test_prep_counts_as_served_for_exit(self) -> None:
+        self.conn.execute("INSERT INTO book_events(game_id, ply, key, move, source, opponent, "
+                          "speed, created_at) VALUES('a', 0, 0, 'e2e4', 'prep', 'rivalbot', "
+                          "'blitz', 0)")
+        self.store(raw_game("a", "e4 e5 Nf3 Nc6", True, "white"))
+        row = self.conn.execute("SELECT exit_ply, exit_source FROM games").fetchone()
+        self.assertEqual((row["exit_ply"], row["exit_source"]), (2, "served"))
+
+
 class ServerTests(DbTestCase):
     def test_add_manual_candidate_and_read_position(self) -> None:
         try:
@@ -246,6 +293,15 @@ class ServerTests(DbTestCase):
             pick = client.post("/api/shim/select", json={"game_id": "x", "moves": [], "color": "white",
                                                          "opponent": "Anyone", "speed": "blitz"})
             self.assertEqual(pick.json()["move"], "g1f3")
+            line = client.post("/api/prep/line", json={"opponent": "Bongaclang", "color": "white",
+                                                       "line": ["e4", "e5", "f4", "Ke7"]})
+            self.assertEqual(line.json()["prepared"], 2)
+            listed = client.get("/api/prep", params={"opponent": "bongaclang"}).json()
+            self.assertEqual([p["move"] for p in listed], ["e2e4", "f2f4"])
+            served = client.post("/api/shim/select", json={"game_id": "y", "moves": ["e2e4", "e7e5"],
+                                                           "color": "white", "opponent": "Bongaclang",
+                                                           "speed": "bullet"})
+            self.assertEqual((served.json()["move"], served.json()["source"]), ("f2f4", "prep"))
 
 
 if __name__ == "__main__":

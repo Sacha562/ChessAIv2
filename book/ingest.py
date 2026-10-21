@@ -105,7 +105,7 @@ def exit_ply(conn: sqlite3.Connection, game: ParsedGame, max_book_ply: int) -> t
     (``'inferred'``).
     """
     served = {row["ply"] for row in conn.execute(
-        "SELECT ply FROM book_events WHERE game_id = ? AND source IN ('book', 'replay')",
+        "SELECT ply FROM book_events WHERE game_id = ? AND source IN ('book', 'replay', 'prep')",
         (game.id,))}
     n_plies = len(game.moves)
     if not served:

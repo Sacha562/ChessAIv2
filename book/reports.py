@@ -11,7 +11,7 @@ import sqlite3
 
 import chess
 
-from . import db, scoring, selector, stats
+from . import db, prep, scoring, selector, stats
 
 RECENT_EVENTS = 30
 RECENT_GAMES = 50
@@ -111,6 +111,7 @@ def opponent_detail(conn: sqlite3.Connection, opponent: str, settings: dict) -> 
         "opponent": opponent,
         "name": rows[0]["opponent_name"] if rows else opponent,
         "determinism": determinism, "repeated_positions": repeated, "summary": summary,
+        "prep": prep.list_prep(conn, opponent),
         "lines": [{"speed": s, "color": c, "moves": line.split(),
                    "san": _opening_san(line, LINE_PLIES), "games": len(group),
                    "score": _score([r["result"] for r in group]),
@@ -187,6 +188,7 @@ def position(conn: sqlite3.Connection, moves: tuple[str, ...], opponent: str, sp
         "analysis": dict(position_row) | {"key": str(analysis.key)} if position_row else None,
         "jobs": [dict(r) for r in queued],
         "played": _played_here(conn, analysis.key, opponent, speed, board),
+        "prep": prep.prep_move(conn, opponent, analysis.key) if opponent else None,
     }
 
 

@@ -4,6 +4,8 @@ Chooses the book move for one live request from the lichess-bot shim
 ([shim/homemade.py.md](shim/homemade.py.md)) via
 [`POST /api/shim/select`](server.py.md#shim-endpoints). Precedence:
 
+0. **Prep:** a move prepared for this opponent in this exact position
+   ([prep.py.md](prep.py.md)) is always played, at any speed and any ply.
 1. **Replay:** if a game we won against this opponent (same color; same speed
    by default) has exactly the current move list as its prefix, play its next
    move. This works at any ply, beyond the book horizon too, until the opponent
@@ -44,6 +46,7 @@ the dashboard explorer, so the dashboard shows exactly what the selector sees.
 ### `class Decision`
 
 `move` (UCI or `None`), `source`, `detail` (dict). Sources:
+- `prep`: a per-opponent prepared move
 - `replay`: `detail.game` is the replayed game's id
 - `book`: `detail` holds `tier_limit` and `posterior_mean`
 - `miss`
@@ -110,7 +113,8 @@ Thompson-samples, logs `book`, and returns the move.
 ### `choose`
 
 Entry point. Rebuilds the board (`invalid` on failure), returns `not_our_turn`
-if we are not to move, tries replay (when `replay_enabled`), returns `horizon`
+if we are not to move, plays a legal prep move for (opponent, position) if one
+exists ([`prep_move`](prep.py.md#prep_move)), tries replay (when `replay_enabled`), returns `horizon`
 at or beyond `max_book_ply`, else [`_book_pick`](#_book_pick). It never raises
 for a bad request.
 

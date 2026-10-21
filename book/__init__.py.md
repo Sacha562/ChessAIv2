@@ -58,6 +58,7 @@ lichess <──games/moves── [lichess-bot]  smikkelbot container
 | [scoring.py](scoring.py.md) | Per-game learning signal; window calibration. |
 | [stats.py](stats.py.md) | Beta posteriors, Thompson sampling, tier rule. |
 | [selector.py](selector.py.md) | Picks the book move for a live request. |
+| [prep.py](prep.py.md) | Per-opponent prepared moves (override replay and book). |
 | [worker.py](worker.py.md) | Background Stockfish queue and periodic ingest. |
 | [reports.py](reports.py.md) | Read models for the dashboard. |
 | [server.py](server.py.md) | FastAPI app: shim API, dashboard API, static files. |
@@ -83,7 +84,9 @@ lichess <──games/moves── [lichess-bot]  smikkelbot container
    move. A higher tier unlocks *per opponent and speed* only when every lower
    candidate is exhausted against that opponent. When all are exhausted, a
    deeper and wider re-analysis is queued. See [worker.py.md](worker.py.md).
-6. **Replay.** If we beat this opponent before in a game whose moves match the
+6. **Prep.** Hand-set per-opponent forced moves ([prep.py.md](prep.py.md))
+   beat everything else, for opponents with a known fixed repertoire.
+7. **Replay.** If we beat this opponent before in a game whose moves match the
    current game so far, that game's next move is played, for the whole game.
 
 ## How to Build & Run

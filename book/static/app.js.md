@@ -15,7 +15,7 @@ It renders into `main#view` of [index.html](index.html.md) and is styled by
 |------|------|-----------|--------------|
 | `#/overview` (default) | `renderOverview` | `GET /api/overview`, `POST /api/ingest` | Stat tiles (games, opponents, score, analysed positions, candidates, manual candidates); per-speed table with a link to the pooled book; worker state, last ingest, per-kind queue counts, "Ingest now"; recent book decisions linked to lichess. Refreshes every 5 s. |
 | `#/opponents` | `renderOpponents` | `GET /api/opponents` | Filterable table: games, score, per-speed chips, determinism %, wins (replayable), last played. |
-| `#/opponent/<id>` | `renderOpponent` | `GET /api/opponents/<id>` | Per speed/color W/D/L, mean signal and book exit; most played 6-ply lines (open in the explorer); recent games with signal and exit ply. |
+| `#/opponent/<id>` | `renderOpponent` | `GET /api/opponents/<id>`, `DELETE /api/prep` | Per speed/color W/D/L, mean signal and book exit; the opponent's prep lines (open in the explorer, remove); most played 6-ply lines (open in the explorer); recent games with signal and exit ply. |
 | `#/explore?moves=&opp=&speed=` | `renderExplore` | `GET /api/settings`, `GET /api/position`, `GET /api/opponents` (name suggestions) | Board + candidates for one position, opponent and speed. See below. |
 | `#/queue` | `renderQueue` | `GET /api/queue` | Running/queued jobs, then recent finished ones with errors. Refreshes every 5 s. |
 | `#/settings` | `renderSettings` | `GET /api/settings`, `GET /api/calibration`, `PUT /api/settings` | Editable table of every setting (checkbox for booleans; JSON for `tier_gaps`) with defaults; the eval-window calibration bar chart. |
@@ -41,6 +41,10 @@ It renders into `main#view` of [index.html](index.html.md) and is styled by
 - **Analysis panel.** Analysis depth and status; **Analyse now** / **Widen**
   queue a forced Stockfish job. **Add candidate** picks any legal move from a
   dropdown plus a tier and posts it as manual.
+- **Prep** (only with an opponent selected):
+  - **Prep selected move vs …** always plays the dropdown move here against that opponent (`POST /api/prep`).
+  - **Prep this line as White / Black** prepares every move of that color along the current path (`POST /api/prep/line`).
+  - When the position has prep, a banner names the forced move and offers **remove**.
 - **Moves played here.** Our and opponents' moves in this position, with game
   counts (overall and against the selected opponent) and our score.
 
