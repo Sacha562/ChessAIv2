@@ -21,6 +21,11 @@ namespace {
 constexpr int64_t MOVE_OVERHEAD_MS = 30;
 constexpr int64_t TIME_CHECK_MASK  = 2047; // check clock every 2048 nodes
 
+// Root depth cap when a clock governs the move but only one legal move exists: there is
+// nothing to choose, so don't burn the budget — a few cheap plies still report a sane
+// score and PV and leave the TT warm for the next move.
+constexpr int ONLY_MOVE_MAX_DEPTH = 4;
+
 // --- Selective-search knobs (Phase 1b). First-cut values; SPSA-tunable later. ---
 
 // Internal Iterative Reduction: at a node this deep with no TT move, search one ply
@@ -723,6 +728,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     iterationStartMs_  = 0;
 
     // Guarantee a legal fallback so we never emit a null bestmove.
+    bool onlyMove = false;
     {
         Movelist moves;
         movegen::legalmoves(moves, board);
@@ -732,6 +738,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
             return Move(Move::NO_MOVE);
         }
         rootBestCompleted_ = moves[0];
+        onlyMove           = (moves.size() == 1);
     }
 
     setupTiming(limits, board);
@@ -741,8 +748,13 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     // exceed the root depth via check extensions; what keeps the killer / staticEvals_
     // tables in bounds there is the `ply >= MAX_PLY - 1` leaf guard in search/qsearch,
     // plus the `ply + 1 < MAX_PLY - 1` gate on the extension itself.)
-    const int maxDepth = std::min((limits.depth > 0) ? limits.depth : MAX_PLY - 1, MAX_PLY - 1);
-    Value     score    = VALUE_ZERO;
+    const int depthCap = std::min((limits.depth > 0) ? limits.depth : MAX_PLY - 1, MAX_PLY - 1);
+
+    // A forced reply under a clock gets only a shallow search. Untimed searches
+    // (depth / nodes / infinite) run as asked: bench and analysis must not change.
+    const int maxDepth =
+        (onlyMove && useTime_) ? std::min(depthCap, ONLY_MOVE_MAX_DEPTH) : depthCap;
+    Value score = VALUE_ZERO;
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
         rootBest_         = Move(Move::NO_MOVE);

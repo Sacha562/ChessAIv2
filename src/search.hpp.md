@@ -51,7 +51,8 @@ a [transposition table](tt.hpp.md).
 ## Namespace
 
 - Public API (`SearchState`, `Limits`, `Tunables`, `Searcher`) in namespace `engine`.
-- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the **structural**
+- `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `ONLY_MOVE_MAX_DEPTH` (root depth cap for a
+  timed search with a single legal move), `scoreToUci`, and the **structural**
   selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
   `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
   `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH`, `SINGULAR_TT_DEPTH_MARGIN`
@@ -295,8 +296,12 @@ time, or a forced mate stops it. Optionally prints an `info` line per completed
 iteration ([`reportIteration`](#searcherreportiteration), with the full PV) and a final
 `bestmove <move> [ponder <reply>]` ([`printBestMove`](#searcherprintbestmove)). A ponder
 or infinite search that ends early (a forced mate, the depth cap, a node cap) waits in
-[`awaitRelease`](#searcherawaitrelease) before reporting, as UCI requires.
-
+[`awaitRelease`](#searcherawaitrelease) before reporting, as UCI requires. When a clock
+governs the move (`useTime_`) and the position has exactly **one legal move**, the depth
+cap drops to `ONLY_MOVE_MAX_DEPTH` (4): the move is forced, so the engine replies almost
+instantly instead of spending its soft budget, while still emitting a score and PV. A
+`go ponder` on a forced position also caps at 4, then holds its `bestmove` in
+`awaitRelease` and answers at once on `ponderhit`.
 **When to use:** once per move, from the search thread.
 
 **Parameters:**
@@ -327,7 +332,10 @@ run until the hard limit. While pondering, neither limit applies — the search 
 deepening until the `ponderhit`; [`syncPonder`](#searchersyncponder) runs before the
 soft check so a hit is seen at the iteration boundary too. The root
 depth is clamped to `MAX_PLY - 1` even when `go depth N` requests a larger `N`, so the
-iterative-deepening loop itself cannot run past the per-ply tables. A node's `ply` can
+iterative-deepening loop itself cannot run past the per-ply tables. The only-move cap
+applies **only to timed searches** (`wtime`/`btime` or `movetime`); `go depth`,
+`go nodes`, and `go infinite` search a forced position as normal, so `bench` node counts
+and analysis are unaffected. A node's `ply` can
 still exceed the root depth via **check extensions**; what keeps the
 [`History`](history.hpp.md) killers and `staticEvals_` in bounds there is the
 `ply >= MAX_PLY - 1` leaf guard in [`search`](#searchersearch) / [`qsearch`](#searcherqsearch)
