@@ -36,7 +36,7 @@ const char* const POSITIONS[] = {
 void run(int depth) {
     if (depth <= 0) depth = DEFAULT_DEPTH;
 
-    std::atomic<bool> stop{false};
+    std::atomic<SearchState> state{SearchState::Running};
     TranspositionTable tt(16);
     uint64_t totalNodes = 0;
 
@@ -45,7 +45,7 @@ void run(int depth) {
     for (const char* fen : POSITIONS) {
         Board board(fen);
         tt.clear();                       // per-position clear keeps the count deterministic
-        Searcher searcher(stop, tt);
+        Searcher searcher(state, tt);
         Limits limits;
         limits.depth = depth;
         searcher.think(board, limits, /*printBest=*/false, /*printInfo=*/false);

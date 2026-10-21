@@ -17,7 +17,8 @@ against directly; the suite validates them behaviourally instead:
 
 All searches are deterministic — fixed depth, single thread, no clock, a fresh TT per
 call. A local `bestMove(fen, depth, tp)` helper runs a silent fixed-depth search under a
-given [`Tunables`](../src/search.hpp.md#struct-tunables), and `singular(on)` builds a
+given [`Tunables`](../src/search.hpp.md#struct-tunables) (with a local
+[`SearchState`](../src/search.hpp.md#enum-class-searchstate) left `Running`), and `singular(on)` builds a
 `Tunables` with singular extensions toggled. Fixed FENs (a back-rank mate, a hanging
 queen, a free knight) have a single forcing best move and are searched at depth ≥ 8 so the
 default trigger depth (`SingularMinDepth = 8`) is reached.

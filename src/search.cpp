@@ -115,8 +115,15 @@ int64_t Searcher::elapsedMs() const {
     return duration_cast<milliseconds>(steady_clock::now() - start_).count();
 }
 
+// Time charged to this move's budget: everything since `go`, less the share of
+// pondering that `ponderCreditPermille` leaves uncharged (zero without a ponderhit).
+int64_t Searcher::clockMs() const {
+    return elapsedMs() - ponderDiscountMs_;
+}
+
 bool Searcher::checkStop() {
-    if (stop_.load(std::memory_order_relaxed)) {
+    syncPonder();
+    if (state_.load(std::memory_order_relaxed) == SearchState::Stopped) {
         timeUp_ = true;
         return true;
     }
@@ -124,11 +131,37 @@ bool Searcher::checkStop() {
         timeUp_ = true;
         return true;
     }
-    if (useTime_ && elapsedMs() >= hardLimitMs_) {
+    if (budgetSpent()) {
         timeUp_ = true;
         return true;
     }
     return false;
+}
+
+// Leave ponder mode once the GUI's `ponderhit` has landed: the move's clock starts
+// now, charged with `ponderCreditPermille` of the time already spent pondering.
+void Searcher::syncPonder() {
+    if (!pondering_ || state_.load(std::memory_order_relaxed) != SearchState::Running) return;
+    pondering_        = false;
+    ponderDiscountMs_ = elapsedMs() * (1000 - tp_.ponderCreditPermille) / 1000;
+}
+
+// Is this move's clock budget used up? Past the hard limit — or, right after a
+// ponderhit, inside an iteration that began past the soft limit, which the clock would
+// never have let start (outside pondering an iteration always begins before it).
+bool Searcher::budgetSpent() const {
+    if (!useTime_ || pondering_) return false;
+    return clockMs() >= hardLimitMs_ || iterationStartMs_ - ponderDiscountMs_ >= softLimitMs_;
+}
+
+// UCI forbids `bestmove` until the GUI releases the search: a ponder search waits for
+// `ponderhit` or `stop`, an infinite one for `stop`. Blocks on the state atomic, which
+// the UCI thread notifies on every change, so the wait costs no CPU.
+void Searcher::awaitRelease(bool infinite) const {
+    for (SearchState s = state_.load(std::memory_order_relaxed);
+         s == SearchState::Pondering || (infinite && s == SearchState::Running);
+         s = state_.load(std::memory_order_relaxed))
+        state_.wait(s, std::memory_order_relaxed);
 }
 
 // Derive the node cap and soft/hard clock budgets for this `go`. Sets `useTime_`
@@ -193,11 +226,32 @@ Value Searcher::correctedEval(const Board& board, Value raw) const {
     return tp_.useCorrHist ? corrHist_.corrected(board, raw) : raw;
 }
 
+// Triangular PV update: `m` raised alpha at this PV node, so this ply's line becomes
+// `m` followed by the child's line. The child's row is fresh: every search() call
+// resets its own length on entry, so a child that found no PV contributes nothing.
+void Searcher::updatePv(int ply, Move m) {
+    const int childLength = pvLength_[ply + 1];
+    pv_[ply][0]           = m;
+    std::copy_n(pv_[ply + 1].begin(), childLength, pv_[ply].begin() + 1);
+    pvLength_[ply] = childLength + 1;
+}
+
+// Keep the root line of a completed iteration: the table itself is overwritten by the
+// next (possibly aborted) iteration.
+void Searcher::saveRootPv() {
+    rootPv_       = pv_[0];
+    rootPvLength_ = pvLength_[0];
+}
+
 Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
                        Move excluded) {
-    if (timeUp_) return VALUE_ZERO;
-
     const bool inSingular = excluded != Move(Move::NO_MOVE);
+
+    // A singular verification re-searches this very ply, so it must not wipe the line
+    // its parent node is building there.
+    if (!inSingular) pvLength_[ply] = 0;
+
+    if (timeUp_) return VALUE_ZERO;
 
     ++nodes_;
     if ((nodes_ & TIME_CHECK_MASK) == 0) checkStop();
@@ -466,7 +520,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             bestMove = m;
             if (ply == 0) rootBest_ = m;
         }
-        if (score > alpha) alpha = score;
+        if (score > alpha) {
+            alpha = score;
+            if (pvNode) updatePv(ply, m);
+        }
         if (alpha >= beta) {
             // Fail-high cutoff. A quiet cutoff teaches move ordering: reward this move,
             // penalise the quiets tried before it, and record killer / countermove /
@@ -613,6 +670,43 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     return best;
 }
 
+// One `info` line for a completed iteration, with the full principal variation.
+void Searcher::reportIteration(int depth, Value score) const {
+    const int64_t  ms  = elapsedMs();
+    const uint64_t nps = ms > 0 ? (nodes_ * 1000ull / static_cast<uint64_t>(ms)) : nodes_;
+    std::cout << "info depth " << depth << " score " << scoreToUci(score) << " nodes " << nodes_
+              << " nps " << nps << " hashfull " << tt_.hashfull() << " time " << ms << " pv";
+    for (int i = 0; i < rootPvLength_; ++i)
+        std::cout << ' ' << uci::moveToUci(rootPv_[i]);
+    std::cout << std::endl;
+}
+
+// The opponent reply to ponder on after the best move: the PV's second move, else the
+// TT move of the position after it (a fail-high can leave the PV a single move long).
+// A TT move is checked for legality, since a colliding key can hand back a stranger's.
+// Returns NO_MOVE when neither source has one. `board` is the root position; it is
+// restored before returning.
+Move Searcher::ponderMove(Board& board) const {
+    const Move best = rootBestCompleted_;
+    if (rootPvLength_ >= 2 && rootPv_[0] == best) return rootPv_[1];
+
+    board.makeMove(best);
+    const TTProbe tt = tt_.probe(board.hash());
+    Movelist      replies;
+    movegen::legalmoves(replies, board);
+    const bool legal =
+        tt.hit && std::find(replies.begin(), replies.end(), tt.move) != replies.end();
+    board.unmakeMove(best);
+    return legal ? tt.move : Move(Move::NO_MOVE);
+}
+
+void Searcher::printBestMove(Board& board) const {
+    std::cout << "bestmove " << uci::moveToUci(rootBestCompleted_);
+    const Move ponder = ponderMove(board);
+    if (ponder != Move(Move::NO_MOVE)) std::cout << " ponder " << uci::moveToUci(ponder);
+    std::cout << std::endl;
+}
+
 Move Searcher::think(Board board, const Limits& limits, bool printBest, bool printInfo) {
     start_  = std::chrono::steady_clock::now();
     nodes_  = 0;
@@ -623,12 +717,17 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
+    rootPvLength_      = 0;
+    pondering_         = limits.ponder;
+    ponderDiscountMs_  = 0;
+    iterationStartMs_  = 0;
 
     // Guarantee a legal fallback so we never emit a null bestmove.
     {
         Movelist moves;
         movegen::legalmoves(moves, board);
         if (moves.empty()) {
+            awaitRelease(limits.infinite);
             if (printBest) std::cout << "bestmove 0000" << std::endl;
             return Move(Move::NO_MOVE);
         }
@@ -646,29 +745,29 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     Value     score    = VALUE_ZERO;
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
-        rootBest_ = Move(Move::NO_MOVE);
-        Value v   = aspirationSearch(board, depth, score);
+        rootBest_         = Move(Move::NO_MOVE);
+        iterationStartMs_ = elapsedMs();
+        Value v           = aspirationSearch(board, depth, score);
 
         if (timeUp_) break; // incomplete iteration: keep previous best
 
         score              = v;
         rootBestCompleted_ = rootBest_;
+        saveRootPv();
 
-        if (printInfo) {
-            const int64_t  ms  = elapsedMs();
-            const uint64_t nps = ms > 0 ? (nodes_ * 1000ull / static_cast<uint64_t>(ms)) : nodes_;
-            std::cout << "info depth " << depth << " score " << scoreToUci(score) << " nodes "
-                      << nodes_ << " nps " << nps << " hashfull " << tt_.hashfull() << " time "
-                      << ms << " pv " << uci::moveToUci(rootBestCompleted_) << std::endl;
-        }
+        if (printInfo) reportIteration(depth, score);
 
         // Soft stop: past the soft budget, a new (more expensive) depth won't
-        // finish in time, so stop now and keep this iteration's move.
-        if (useTime_ && elapsedMs() >= softLimitMs_) break;
+        // finish in time, so stop now and keep this iteration's move. While pondering
+        // the clock does not run, so the search keeps deepening until the ponderhit.
+        syncPonder();
+        if (useTime_ && !pondering_ && clockMs() >= softLimitMs_) break;
         if (is_mate(score)) break; // forced mate found
     }
 
-    if (printBest) std::cout << "bestmove " << uci::moveToUci(rootBestCompleted_) << std::endl;
+    // A ponder or infinite search that finished early still owes the GUI its wait.
+    awaitRelease(limits.infinite);
+    if (printBest) printBestMove(board);
     return rootBestCompleted_;
 }
 

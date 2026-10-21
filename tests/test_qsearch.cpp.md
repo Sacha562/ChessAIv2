@@ -29,7 +29,8 @@ Also run as part of the commit gate ([run_checks.py.md](../scripts/run_checks.py
 ## Helpers
 
 `bestMove(fen, depth)` runs a silent fixed-depth search from `fen` with a fresh 8 MB
-TT and returns the best move as UCI text.
+TT and a local [`SearchState`](../src/search.hpp.md#enum-class-searchstate) left
+`Running` (never stopped or pondering), and returns the best move as UCI text.
 
 ## Tests
 

@@ -33,10 +33,11 @@ private:
     void handleGo(std::istringstream& is);
     void handleSetOption(std::istringstream& is);
     void stopSearch();
+    void ponderHit();
 
-    Board             board_;
-    std::atomic<bool> stop_{false};
-    std::thread       searchThread_;
+    Board                    board_;
+    std::atomic<SearchState> state_{SearchState::Running};
+    std::thread              searchThread_;
 
     // Shared transposition table (persists across moves); sized by the Hash option.
     TranspositionTable tt_{16};
@@ -51,9 +52,18 @@ private:
 };
 
 void Engine::stopSearch() {
-    stop_.store(true);
+    state_.store(SearchState::Stopped, std::memory_order_relaxed);
+    state_.notify_all(); // wake a search parked in its ponder/infinite wait
     if (searchThread_.joinable()) searchThread_.join();
-    stop_.store(false);
+    state_.store(SearchState::Running, std::memory_order_relaxed);
+}
+
+// The opponent played the predicted move: the ponder search becomes the real one and its
+// clock starts. A `ponderhit` with no ponder search running is ignored.
+void Engine::ponderHit() {
+    SearchState expected = SearchState::Pondering;
+    if (state_.compare_exchange_strong(expected, SearchState::Running, std::memory_order_relaxed))
+        state_.notify_all();
 }
 
 void Engine::handlePosition(std::istringstream& is) {
@@ -105,13 +115,16 @@ void Engine::handleGo(std::istringstream& is) {
             is >> limits.movestogo;
         else if (token == "infinite")
             limits.infinite = true;
+        else if (token == "ponder")
+            limits.ponder = true;
     }
 
-    stop_.store(false);
+    state_.store(limits.ponder ? SearchState::Pondering : SearchState::Running,
+                 std::memory_order_relaxed);
     Board          snapshot = board_; // search on a copy
     const Tunables tp       = tunables_;
     searchThread_           = std::thread([this, snapshot, limits, tp]() mutable {
-        Searcher searcher(stop_, tt_, tp);
+        Searcher searcher(state_, tt_, tp);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
     });
 }
@@ -143,6 +156,8 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.hardPermille = std::clamp(std::stoi(value), 1, 100000);
         } else if (name == "AssumedMovestogo" && !value.empty()) {
             tunables_.assumedMovestogo = std::clamp(std::stoi(value), 1, 300);
+        } else if (name == "PonderCreditPermille" && !value.empty()) {
+            tunables_.ponderCreditPermille = std::clamp(std::stoi(value), 0, 1000);
         } else if (name == "Tempo" && !value.empty()) {
             tunables_.tempo = std::clamp(std::stoi(value), 0, 100);
         } else if (name == "DeltaMargin" && !value.empty()) {
@@ -253,6 +268,8 @@ void Engine::loop() {
                       << "option name TimeSoftPermille type spin default 600 min 1 max 100000\n"
                       << "option name TimeHardPermille type spin default 2400 min 1 max 100000\n"
                       << "option name AssumedMovestogo type spin default 30 min 1 max 300\n"
+                      << "option name Ponder type check default false\n"
+                      << "option name PonderCreditPermille type spin default 500 min 0 max 1000\n"
                       << "option name Tempo type spin default 9 min 0 max 100\n"
                       << "option name DeltaMargin type spin default 203 min 0 max 1000\n"
                       << "option name EndgamePieces type spin default 7 min 0 max 32\n"
@@ -308,6 +325,8 @@ void Engine::loop() {
             handleGo(is);
         } else if (token == "stop") {
             stopSearch();
+        } else if (token == "ponderhit") {
+            ponderHit();
         } else if (token == "setoption") {
             handleSetOption(is);
         } else if (token == "quit") {

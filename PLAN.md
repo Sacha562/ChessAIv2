@@ -585,7 +585,7 @@ Incremental accumulator on make/unmake; AVX2 kernels; self-play data generation 
 *Open question before starting:* the trainer. `bullet` is CUDA-first and the GPU here is an AMD RX 6800 XT (see §20). Check `bullet`'s current AMD support, else use native-Linux ROCm + `nnue-pytorch`, a rented NVIDIA GPU, or CPU training for a small first net (768→128/256).
 
 **Phase 3 — Ongoing (optional)**
-Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering, Chess960.
+Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering (✅ `go ponder` / `ponderhit` + full-PV `info` lines, unreleased), Chess960.
 
 ---
 

@@ -2,8 +2,8 @@
 
 The UCI protocol front end. Reads commands from stdin, maintains the current board,
 and dispatches to [search](search.hpp.md), [perft](perft.hpp.md), and
-[bench](bench.hpp.md). The search runs on a separate thread so `stop` and
-`go infinite` work while the engine keeps reading input. Invoked by
+[bench](bench.hpp.md). The search runs on a separate thread so `stop`, `ponderhit`,
+`go infinite`, and `go ponder` work while the engine keeps reading input. Invoked by
 [main](main.cpp.md) as the default mode.
 
 The public surface is a single free function, [`run_uci`](#run_uci); all state and
@@ -18,8 +18,8 @@ command handling live in a file-local `Engine` class (anonymous namespace).
 
 `./chessai` with no arguments enters this loop (see [README.md](../README.md) and
 [build.md](../build.md)). Point a GUI / cutechess / fastchess at the binary, or type
-UCI commands directly. Supported: `uci`, `isready`, `ucinewgame`, `position`, `go`,
-`stop`, `setoption`, `quit`, plus the debug helpers `d` (print board), `perft [d]` /
+UCI commands directly. Supported: `uci`, `isready`, `ucinewgame`, `position`, `go`
+(including `go ponder` and `go infinite`), `stop`, `ponderhit`, `setoption`, `quit`, plus the debug helpers `d` (print board), `perft [d]` /
 `perft test`, and `bench [d]`.
 
 ## Namespace
@@ -40,7 +40,7 @@ and run by [`run_uci`](#run_uci).
 | Field | Type | Description |
 |-------|------|-------------|
 | `board_` | `Board` | Current position (starts at `STARTPOS`). |
-| `stop_` | `std::atomic<bool>` | Abort flag shared with the [`Searcher`](search.hpp.md#class-searcher). |
+| `state_` | `std::atomic<`[`SearchState`](search.hpp.md#enum-class-searchstate)`>` | Search lifecycle shared with the [`Searcher`](search.hpp.md#class-searcher), which only reads it. Written here (`go` / `go ponder` / `ponderhit` / stop), each write followed by `notify_all()` to wake a search waiting to report. `Running` between searches. |
 | `searchThread_` | `std::thread` | Background thread running the current search. |
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
@@ -74,8 +74,10 @@ command's `std::istringstream&` (in/out — the stream is consumed).
 
 ### `Engine::handleGo` (internal)
 
-Parse a `go` command into a [`Limits`](search.hpp.md#struct-limits), snapshot the
-board and the current [`Tunables`](search.hpp.md#struct-tunables), and launch a
+Parse a `go` command into a [`Limits`](search.hpp.md#struct-limits) (the `ponder`
+token sets `Limits::ponder`), set `state_` to `Pondering` for `go ponder` or `Running`
+otherwise, snapshot the board and the current
+[`Tunables`](search.hpp.md#struct-tunables), and launch a
 [`Searcher`](search.hpp.md#class-searcher) — sharing `tt_` by reference — on
 `searchThread_`. The search runs on the snapshot copy so the main thread can keep
 reading input.
@@ -84,7 +86,9 @@ reading input.
 
 Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_` or a
 field of [`tunables_`](search.hpp.md#struct-tunables). Recognized tunable options:
-`TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `Tempo`, `DeltaMargin`,
+`TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille`
+(`0`–`1000`, default `500`: the share of ponder time charged to the move at `ponderhit`;
+see [`Tunables`](search.hpp.md#struct-tunables)), `Tempo`, `DeltaMargin`,
 and `EndgamePieces`, plus the selective-search toggles (`spin`, `0`/`1`) used to
 A/B-isolate each signal's Elo: the ordering signals `UseKillers`, `UseHistory`,
 `UseCountermove`, `UseIIR` (all default `1` — history and IIR both inverted from step-1
@@ -127,13 +131,26 @@ for `Tempo`, `DeltaMargin`, and `EndgamePieces` matches the corresponding
 self-play tune. Setting `Hash` first calls [`stopSearch`](#enginestopsearch) (no
 live search may hold the table) and then
 [`tt_.resize`](tt.hpp.md#transpositiontableresize). Malformed integer values are
-ignored (caught). Other option names are accepted and ignored for now.
+ignored (caught). Other option names are accepted and ignored for now — including
+`Ponder` (`check`, default `false`), which is advertised only so GUIs and lichess-bot
+offer pondering; the engine needs no state for it, since the GUI decides when to send
+`go ponder`.
 
 `ucinewgame` clears the TT ([`tt_.clear`](tt.hpp.md#transpositiontableclear)) after
 stopping any search, so a fresh game starts with an empty table.
 
 ### `Engine::stopSearch` (internal)
 
-Signal the running search to stop (`stop_ = true`), join `searchThread_`, then reset
-`stop_` to `false`. Idempotent and safe when no search is running. Also called from
-the destructor to guarantee a clean join on shutdown.
+Signal the running search to stop (`state_ = Stopped` plus `notify_all()`, which also
+wakes a search parked in its ponder / infinite wait so it reports `bestmove`), join
+`searchThread_`, then reset `state_` to `Running`. Idempotent and safe when no search is
+running. Also called from the destructor to guarantee a clean join on shutdown.
+
+### `Engine::ponderHit` (internal)
+
+Handle `ponderhit`: the opponent played the predicted move, so the ponder search becomes
+the real one. Atomically moves `state_` from `Pondering` to `Running` (a
+`compare_exchange_strong`) and notifies; the [`Searcher`](search.hpp.md#searchersyncponder)
+then starts its clock. A `ponderhit` with no ponder search running leaves `state_`
+untouched and is ignored. A ponder **miss** needs no handler: the GUI sends `stop` (the
+reported `bestmove` is discarded by the GUI), then a new `position` and `go`.

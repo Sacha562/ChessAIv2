@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -10,6 +11,15 @@ namespace engine {
 
 class TranspositionTable;
 
+// Lifecycle of a search, written by the UCI thread and polled by the searcher. A ponder
+// search runs as `Pondering` until `ponderhit` makes it `Running` (its clock starts) or
+// `stop` makes it `Stopped`.
+enum class SearchState : uint8_t {
+    Running,
+    Pondering,
+    Stopped
+};
+
 // Everything the UCI `go` command can specify.
 struct Limits {
     int     depth    = 0;                             // fixed depth (0 = no depth cap)
@@ -18,6 +28,7 @@ struct Limits {
     int64_t wtime = 0, btime = 0, winc = 0, binc = 0; // ms on the clocks
     int     movestogo = 0;
     bool    infinite  = false;
+    bool    ponder    = false; // `go ponder`: think on the predicted position, untimed
 };
 
 // Self-play-tunable engine knobs. Held per-search and copied into each Searcher, so
@@ -35,6 +46,11 @@ struct Tunables {
     int softPermille     = 600;  // normal stop ~= 0.6 of the base slice
     int hardPermille     = 2400; // safety abort ~= 4x the soft limit
     int assumedMovestogo = 30;   // assumed moves-to-go under sudden death (>= 1)
+
+    // Pondering: at `ponderhit`, this permille of the time already spent pondering is
+    // charged to the move's budget. 0 = the budget starts fresh at the hit (deepest
+    // move); 1000 = pondering counts in full (often an instant move, banking the clock).
+    int ponderCreditPermille = 500;
 
     // Evaluation.
     Value tempo = 9; // side-to-move bonus (centipawns)
@@ -128,16 +144,16 @@ struct Tunables {
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
 // Search (null-window scout + re-search) with a transposition table and soft/hard
 // time management.
-// One instance per search; the shared `stop` flag lets the UCI thread abort it,
-// and the transposition table is shared (and outlives the searcher) so results
-// persist across moves and, later, across threads.
+// One instance per search; the shared `state` lets the UCI thread stop it or end its
+// pondering, and the transposition table is shared (and outlives the searcher) so
+// results persist across moves and, later, across threads.
 class Searcher {
 public:
-    Searcher(std::atomic<bool>& stopFlag, TranspositionTable& tt, Tunables tp = {})
-        : stop_(stopFlag), tt_(tt), tp_(tp) {}
+    Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp = {})
+        : state_(state), tt_(tt), tp_(tp) {}
 
     // Runs the search on a copy of `board`. Prints `info` lines when
-    // `printInfo`, and a final `bestmove` line when `printBest`.
+    // `printInfo`, and a final `bestmove ... ponder ...` line when `printBest`.
     // Returns the best move found.
     Move think(Board board, const Limits& limits, bool printBest = true, bool printInfo = true);
 
@@ -157,7 +173,19 @@ private:
 
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
+    void    syncPonder();
+    bool    budgetSpent() const;
     int64_t elapsedMs() const;
+    int64_t clockMs() const;
+    void    awaitRelease(bool infinite) const;
+
+    // Principal variation: the triangular table the search fills, and the copy of the
+    // root line kept from the last completed iteration.
+    void updatePv(int ply, Move m);
+    void saveRootPv();
+    void reportIteration(int depth, Value score) const;
+    Move ponderMove(Board& board) const;
+    void printBestMove(Board& board) const;
 
     // LMR reduction table, rebuilt from tp_.lmrBase / tp_.lmrDivisor at the start of
     // each search (they are UCI-tunable). Depth / move-count saturate at LMR_DIM.
@@ -166,14 +194,14 @@ private:
 
     static constexpr int LMR_DIM = 64;
 
-    std::atomic<bool>&  stop_;
-    TranspositionTable& tt_;
-    Tunables            tp_;
-    uint64_t            nodes_ = 0;
-    History             history_;                // quiet-move ordering heuristics (per search)
-    CorrectionHistory   corrHist_;               // learned static-eval correction (per search)
-    Value               staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
-    uint8_t reductions_[LMR_DIM][LMR_DIM]{};     // LMR reduction table (see buildReductions)
+    std::atomic<SearchState>& state_;
+    TranspositionTable&       tt_;
+    Tunables                  tp_;
+    uint64_t                  nodes_ = 0;
+    History                   history_;      // quiet-move ordering heuristics (per search)
+    CorrectionHistory         corrHist_;     // learned static-eval correction (per search)
+    Value   staticEvals_[MAX_PLY]{};         // per-ply static eval, for RFP/futility/improving
+    uint8_t reductions_[LMR_DIM][LMR_DIM]{}; // LMR reduction table (see buildReductions)
 
     // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
     // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds
@@ -181,12 +209,22 @@ private:
     int contPiece_[MAX_PLY]{};
     int contTo_[MAX_PLY]{};
 
+    // Triangular PV table: pv_[ply] holds the best line from `ply` (pvLength_[ply]
+    // moves), rebuilt from the child's line whenever a PV-node move raises alpha.
+    std::array<std::array<Move, MAX_PLY>, MAX_PLY> pv_{};
+    std::array<int, MAX_PLY>                       pvLength_{};
+    std::array<Move, MAX_PLY>                      rootPv_{}; // PV of the last completed iteration
+    int                                            rootPvLength_ = 0;
+
     std::chrono::steady_clock::time_point start_{};
-    int64_t softLimitMs_ = 0; // don't open a new depth past this (INT64_MAX if none)
-    int64_t hardLimitMs_ = 0; // abort the search past this (INT64_MAX if none)
-    int64_t nodeLimit_   = 0; // 0 = none
-    bool    useTime_     = false;
-    bool    timeUp_      = false;
+    int64_t softLimitMs_      = 0; // don't open a new depth past this (INT64_MAX if none)
+    int64_t hardLimitMs_      = 0; // abort the search past this (INT64_MAX if none)
+    int64_t nodeLimit_        = 0; // 0 = none
+    int64_t ponderDiscountMs_ = 0; // ponder time not charged to the budget (see clockMs)
+    int64_t iterationStartMs_ = 0; // elapsedMs() when the current iteration began
+    bool    useTime_          = false;
+    bool    timeUp_           = false;
+    bool    pondering_        = false; // no ponderhit yet: the clock does not run
 
     Move rootBest_          = Move(Move::NO_MOVE); // best of the in-progress iteration
     Move rootBestCompleted_ = Move(Move::NO_MOVE); // best of the last completed iteration

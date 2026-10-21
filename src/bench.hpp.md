@@ -55,5 +55,7 @@ with `printBest=false, printInfo=false`.
 
 **Warnings:** the node total must stay **deterministic** — do not introduce
 time-dependent or nondeterministic behavior into the searched path, or the signature
-breaks. Each position uses its own local `stop` flag (never triggered here) and a
+breaks. Each position uses its own local
+[`SearchState`](search.hpp.md#enum-class-searchstate) (always `Running`, never stopped
+here) and a
 freshly-cleared TT (so a persistent table can't make the count order-dependent).

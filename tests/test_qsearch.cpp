@@ -20,12 +20,12 @@ namespace {
 // Best move of a fixed-depth search from `fen`, as UCI text. Silent (no info/bestmove
 // printing), fresh TT per call for determinism.
 std::string bestMove(const char* fen, int depth) {
-    std::atomic<bool>  stop{false};
-    TranspositionTable tt(8);
-    Searcher           searcher(stop, tt);
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Searcher                 searcher(state, tt);
 
     Limits limits;
-    limits.depth = depth;
+    limits.depth    = depth;
     const Move best = searcher.think(Board(fen), limits, /*printBest=*/false, /*printInfo=*/false);
     return uci::moveToUci(best);
 }

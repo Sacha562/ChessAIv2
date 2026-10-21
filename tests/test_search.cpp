@@ -22,9 +22,9 @@ namespace {
 // Best move of a fixed-depth search from `fen`, as UCI text, under the given tunables.
 // Silent (no info/bestmove printing), fresh TT per call for determinism.
 std::string bestMove(const char* fen, int depth, const Tunables& tp) {
-    std::atomic<bool>  stop{false};
-    TranspositionTable tt(8);
-    Searcher           searcher(stop, tt, tp);
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Searcher                 searcher(state, tt, tp);
 
     Limits limits;
     limits.depth    = depth;

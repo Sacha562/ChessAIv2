@@ -28,6 +28,16 @@ back — held in [`History`](history.hpp.md), fed by a new per-ply search stack 
 search that excludes the TT move; if every alternative fails low the TT move is extended,
 via a new `excluded`-move parameter on [`search`](#searchersearch)).
 
+**Pondering** lets the engine think on the opponent's clock. `go ponder` runs an
+ordinary search on the predicted position with the clock stopped; the shared
+[`SearchState`](#enum-class-searchstate) flips from `Pondering` to `Running` on
+`ponderhit` (the clock starts, charged with
+[`ponderCreditPermille`](#struct-tunables) of the time already pondered) or to `Stopped`
+on `stop`. A **triangular PV table** ([`updatePv`](#searcherupdatepv)) records the full
+principal variation, which the `info ... pv` lines print and whose second move is the
+`bestmove ... ponder` reply ([`ponderMove`](#searcherpondermove), with a TT fallback).
+Neither changes the searched tree: `bench` node counts are unchanged.
+
 Each selective layer is behind a [`Tunables`](#struct-tunables) toggle so it can be
 individually A/B-isolated — the discipline that caught step-1's history/IIR regressions.
 Everything above still sits on the fail-soft **Principal Variation Search** negamax with
@@ -40,7 +50,7 @@ a [transposition table](tt.hpp.md).
 
 ## Namespace
 
-- Public API (`Limits`, `Tunables`, `Searcher`) in namespace `engine`.
+- Public API (`SearchState`, `Limits`, `Tunables`, `Searcher`) in namespace `engine`.
 - `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `scoreToUci`, and the **structural**
   selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
   `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
@@ -61,6 +71,23 @@ a [transposition table](tt.hpp.md).
 
 ## Objects / Interfaces
 
+### `enum class SearchState`
+
+The lifecycle of one search, held in a `std::atomic<SearchState>` that the
+[uci](uci.hpp.md) thread owns and writes and the searcher only reads (polled every 2048
+nodes by [`checkStop`](#searchercheckstop), and blocked on by
+[`awaitRelease`](#searcherawaitrelease)). Every write is followed by `notify_all()` so a
+waiting search wakes. All accesses use `std::memory_order_relaxed`: the value carries no
+other data, and thread start/join supply the ordering around a search.
+
+| Enumerator | Meaning |
+|------------|---------|
+| `Running` | A normal search; the clock (if any) runs. Also the resting value between searches. |
+| `Pondering` | A `go ponder` search before `ponderhit`: the clock is stopped and `bestmove` is withheld. `ponderhit` moves it to `Running`. |
+| `Stopped` | `stop` (or `quit`, a new `go`, `position`, `ucinewgame`): abort and report. |
+
+**Used by:** [`Searcher`](#class-searcher), [uci](uci.hpp.md#class-engine), [bench](bench.hpp.md#run), [test_search.cpp.md](../tests/test_search.cpp.md), [test_qsearch.cpp.md](../tests/test_qsearch.cpp.md)
+
 ### `struct Limits`
 
 Everything a UCI `go` command can specify. Populated by
@@ -75,7 +102,8 @@ Everything a UCI `go` command can specify. Populated by
 | `wtime` / `btime` | `int64_t` | Ms remaining on White's / Black's clock. |
 | `winc` / `binc` | `int64_t` | Increment (ms) per move for White / Black. |
 | `movestogo` | `int` | Moves until the next time control; `0` = sudden death (a default of 30 is assumed). |
-| `infinite` | `bool` | Search until an explicit `stop`. |
+| `infinite` | `bool` | Search until an explicit `stop`: `bestmove` is withheld until then, even after a forced mate is found. |
+| `ponder` | `bool` | `go ponder`: the search starts in ponder mode (clock stopped, `bestmove` withheld until `ponderhit` or `stop`). The clock fields are the ones to use from the `ponderhit` on. |
 
 **Used by:** [`Searcher::think`](#searcherthink), [bench](bench.hpp.md#run)
 
@@ -93,6 +121,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `softPermille` | `int` | `600` | Soft limit = `base * softPermille / 1000`. Past it, no new ID iteration is started. |
 | `hardPermille` | `int` | `2400` | Hard limit = `base * hardPermille / 1000`. Past it, the search aborts mid-iteration. |
 | `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. Divides the clock, so it must stay `>= 1`. |
+| `ponderCreditPermille` | `int` | `500` | At `ponderhit`, this permille of the time already spent pondering is charged to the move's budget (`PonderCreditPermille`, 0–1000). `0` = the budget starts fresh at the hit (most depth on a correct guess); `1000` = pondering counts in full (often an instant move, banking clock). Untested default; meant for SPSA / SPRT. Applied by [`syncPonder`](#searchersyncponder). |
 | `tempo` | `Value` | `9` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
 | `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
@@ -219,8 +248,9 @@ for per-signal A/B isolation.
 
 ### `class Searcher`
 
-One search worker: one instance per search. Constructed with a shared atomic stop
-flag (so the [uci](uci.hpp.md) thread can abort it mid-search), a
+One search worker: one instance per search. Constructed with a shared
+[`std::atomic<SearchState>&`](#enum-class-searchstate) (so the [uci](uci.hpp.md) thread
+can stop it mid-search or end its pondering), a
 [`TranspositionTable&`](tt.hpp.md#class-transpositiontable) it shares with the owner
 (so results persist across moves and, later, across threads), and an optional
 [`Tunables`](#struct-tunables) (defaulted for callers like [bench](bench.hpp.md) that
@@ -228,7 +258,7 @@ just want the defaults).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stop_` | `std::atomic<bool>&` | Shared abort flag; set by the UCI thread to stop the search. |
+| `state_` | [`std::atomic<SearchState>&`](#enum-class-searchstate) | Shared search state, owned and written by the UCI thread; read here to stop, to leave ponder mode, and to wait before `bestmove`. |
 | `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
@@ -237,16 +267,22 @@ just want the defaults).
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
 | `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion; read as `[ply-1]` / `[ply-2]` to build a node's continuation context. |
-| `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp. |
-| `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). |
-| `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). |
+| `pv_` | `std::array<std::array<Move, MAX_PLY>, MAX_PLY>` | Triangular PV table: row `ply` holds the best line found from that ply (64 KB). Filled by [`updatePv`](#searcherupdatepv). |
+| `pvLength_` | `std::array<int, MAX_PLY>` | Length of each `pv_` row; reset to 0 on entry to every [`search`](#searchersearch) call. |
+| `rootPv_` / `rootPvLength_` | `std::array<Move, MAX_PLY>` / `int` | The root line of the last **completed** iteration (copied by [`saveRootPv`](#searchersaverootpv)), so an aborted iteration cannot corrupt the reported PV or the ponder move. |
+| `start_` | `std::chrono::steady_clock::time_point` | Search start timestamp (the `go`, not the `ponderhit`). |
+| `softLimitMs_` | `int64_t` | Soft budget in ms — no new depth is opened past it (`INT64_MAX` if untimed). Compared against [`clockMs`](#searcherclockms). |
+| `hardLimitMs_` | `int64_t` | Hard budget in ms — the search aborts past it (`INT64_MAX` if untimed). Compared against [`clockMs`](#searcherclockms). |
 | `nodeLimit_` | `int64_t` | Node cap; `0` = none. |
+| `ponderDiscountMs_` | `int64_t` | Ponder time **not** charged to the budget: set once at the ponderhit to `pondered * (1000 - ponderCreditPermille) / 1000`; `0` otherwise. |
+| `iterationStartMs_` | `int64_t` | `elapsedMs()` when the current iteration began; lets [`budgetSpent`](#searcherbudgetspent) abort, right after a ponderhit, an iteration the clock would never have started. |
 | `useTime_` | `bool` | Whether a wall-clock budget applies. |
 | `timeUp_` | `bool` | Set once the search must abort; unwinds the recursion. |
+| `pondering_` | `bool` | Still in ponder mode (no `ponderhit` seen yet): every clock check is skipped. Starts as [`Limits::ponder`](#struct-limits); cleared by [`syncPonder`](#searchersyncponder). |
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::elapsedMs`](#searcherelapsedms) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
 
@@ -255,8 +291,11 @@ just want the defaults).
 ### `Searcher::think`
 
 Run the full search: configure limits, then iterative-deepen until the depth cap,
-time, or a forced mate stops it. Optionally prints `info` lines each iteration and
-a final `bestmove`.
+time, or a forced mate stops it. Optionally prints an `info` line per completed
+iteration ([`reportIteration`](#searcherreportiteration), with the full PV) and a final
+`bestmove <move> [ponder <reply>]` ([`printBestMove`](#searcherprintbestmove)). A ponder
+or infinite search that ends early (a forced mate, the depth cap, a node cap) waits in
+[`awaitRelease`](#searcherawaitrelease) before reporting, as UCI requires.
 
 **When to use:** once per move, from the search thread.
 
@@ -269,25 +308,61 @@ a final `bestmove`.
 | `printInfo` | `bool` | Emit per-iteration `info` lines (default `true`). |
 
 **Returns:** `Move` — the best move found (`rootBestCompleted_`). Returns
-`Move::NO_MOVE` and prints `bestmove 0000` when the position has no legal moves.
+`Move::NO_MOVE` and prints `bestmove 0000` when the position has no legal moves (after
+the same [`awaitRelease`](#searcherawaitrelease) wait).
 
 **Side Effects:** writes to `std::cout` (`info` / `bestmove`, including a
 `hashfull` field from [`tt_.hashfull()`](tt.hpp.md#transpositiontablehashfull));
 calls [`tt_.newSearch()`](tt.hpp.md#transpositiontablenewsearch) once to advance the
-TT generation; resets and updates all timing/node/root-move members. Reads the
-shared `stop_` flag.
+TT generation; resets and updates all timing/node/root-move/PV/ponder members. Reads
+the shared [`state_`](#enum-class-searchstate) (never writes it); may block on it at the
+end. With `printBest`, probes the TT once more for the ponder reply.
 
 **Warnings:** the first legal move is stored as a fallback **before** searching, so
 `think` never returns a null move in a non-terminal position even if aborted at
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
-stands). Soft stop: once elapsed time reaches [`softLimitMs_`](#class-searcher) no
-new depth is started; the current depth may still run until the hard limit. The root
+stands). Soft stop: once [`clockMs`](#searcherclockms) reaches
+[`softLimitMs_`](#class-searcher) no new depth is started; the current depth may still
+run until the hard limit. While pondering, neither limit applies — the search keeps
+deepening until the `ponderhit`; [`syncPonder`](#searchersyncponder) runs before the
+soft check so a hit is seen at the iteration boundary too. The root
 depth is clamped to `MAX_PLY - 1` even when `go depth N` requests a larger `N`, so the
 iterative-deepening loop itself cannot run past the per-ply tables. A node's `ply` can
 still exceed the root depth via **check extensions**; what keeps the
 [`History`](history.hpp.md) killers and `staticEvals_` in bounds there is the
 `ply >= MAX_PLY - 1` leaf guard in [`search`](#searchersearch) / [`qsearch`](#searcherqsearch)
 plus the `ply + 1 < MAX_PLY - 1` gate on the extension.
+
+### `Searcher::reportIteration` (private)
+
+Print one `info depth … score … nodes … nps … hashfull … time … pv …` line for a
+completed iteration. The `pv` field is the whole of `rootPv_` (the last completed
+iteration's line), not just the root move. `time` and `nps` count from the `go`, so a
+ponder search reports its pondering time too. Cold path: once per iteration.
+
+### `Searcher::ponderMove` (private)
+
+Pick the opponent reply to ponder on after `rootBestCompleted_`.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `board` | `Board&` | The root position (in/out): the best move is made and unmade on it, so it is restored before returning. |
+
+**Returns:** `Move` — `rootPv_[1]` when the saved PV has at least two moves and starts
+with the best move; otherwise the TT move stored for the position after the best move,
+if that entry exists **and** the move is legal there; otherwise `Move::NO_MOVE` (then no
+`ponder` token is printed).
+
+**Warnings:** the TT fallback covers a PV cut to one move (e.g. the root's last
+improvement came from a fail-high whose child left no line). The legality check guards
+against a key collision handing back another position's move. Cold path: once per
+search, with one legal-move generation.
+
+### `Searcher::printBestMove` (private)
+
+Write `bestmove <move>` plus ` ponder <reply>` when [`ponderMove`](#searcherpondermove)
+finds one, then flush. Called by [`think`](#searcherthink) when `printBest`.
 
 ### `Searcher::nodes`
 
@@ -308,12 +383,16 @@ full Phase 1b selective-search stack (returns `best`). Order of operations:
    **NMP** → **ProbCut**;
 4. **IIR** (gated) → movegen → resolve the **continuation context** (the moves 1/2 plies
    back, from the search stack) → **[`orderMoves`](movepick.hpp.md#ordermoves)**;
-5. **move loop**: per-move quiet pruning (**LMP**, **futility**, **history pruning**) → **singular extension**
+5. **PV reset**: `pvLength_[ply] = 0` on entry (before any return), except inside a
+   singular verification, which re-searches the *same* ply and must not wipe the line
+   its parent node is building there;
+6. **move loop**: per-move quiet pruning (**LMP**, **futility**, **history pruning**) → **singular extension**
    (TT move only, pre-make) → record the search-stack move → make → **check extension** →
    **LMR** reduction → **PVS** search/re-search → cutoff bookkeeping (quiet-cutoff
    [`history`](history.hpp.md#historyupdatequietcutoff) updates, including continuation
-   history);
-6. **TT store** (value, best move, bound, and the static eval) — **skipped** during a
+   history) and, at a PV node, an [`updatePv`](#searcherupdatepv) whenever a move
+   raises alpha;
+7. **TT store** (value, best move, bound, and the static eval) — **skipped** during a
    singular-verification search (`excluded` set).
 
 `pvNode` is derived as `beta - alpha > 1`: the root and full-window nodes are PV; the
@@ -492,8 +571,8 @@ only legal move, which the caller reads as "singular").
 - **Prefetch**: `tt_.prefetch(board.zobristAfter(m))` before each `makeMove`.
 
 **Side Effects:** mutates `board` transiently; probes/stores `tt_`; updates `nodes_`,
-`history_` (on quiet cutoffs), and, at `ply == 0`, `rootBest_`; periodically calls
-`checkStop`.
+`history_` (on quiet cutoffs), the PV table (`pv_` / `pvLength_` at this ply), and, at
+`ply == 0`, `rootBest_`; periodically calls `checkStop`.
 
 **Warnings:** draw detection is skipped at the root (`ply > 0` guard) so a move is
 always returned. Uses `isRepetition(1)` (twofold) as the in-search draw rule — the
@@ -501,6 +580,24 @@ library's default is threefold. On abort, partial results are discarded and **no
 stored in the TT. A stale/illegal TT move from a key collision is harmless: it is
 only searched if it matches a generated legal move (the swap is a no-op otherwise).
 Mate scores are rebased through the TT via [`valueToTT`/`valueFromTT`](tt.hpp.md#valuetott--valuefromtt).
+
+### `Searcher::updatePv` (private)
+
+Triangular PV update, called when move `m` raises alpha at a PV node: row `ply` becomes
+`m` followed by row `ply + 1` (the child's line), and `pvLength_[ply]` becomes the
+child's length + 1. The child row is always fresh — every `search` call resets its own
+length on entry — so a child that found no line (a leaf, a draw, a fail-low) contributes
+nothing. Only reached below the `ply >= MAX_PLY - 1` leaf guard, so `ply + 1` and the
+copied length stay inside the table.
+
+**Performance:** runs only on alpha improvements at PV nodes (a small fraction of
+nodes); the per-node cost of the PV is the single length reset in
+[`search`](#searchersearch). It never influences move choice, so `bench` is unchanged.
+
+### `Searcher::saveRootPv` (private)
+
+Copy row 0 of the PV table into `rootPv_` / `rootPvLength_` when an iteration completes,
+so the next (possibly aborted) iteration cannot overwrite the reported line.
 
 ### `Searcher::aspirationSearch` (private)
 
@@ -627,10 +724,53 @@ Called once at the top of [`think`](#searcherthink).
 
 ### `Searcher::checkStop` (private)
 
-Return `true` and set `timeUp_` if the search must stop: the shared `stop_` flag is
-set, the node cap is reached, or the **hard** time limit is exhausted. Called every
-2048 nodes (`TIME_CHECK_MASK`) plus at the top of each iteration.
+Return `true` and set `timeUp_` if the search must stop: the shared
+[`state_`](#enum-class-searchstate) is `Stopped`, the node cap is reached, or
+[`budgetSpent`](#searcherbudgetspent) says the clock budget is used up. First calls
+[`syncPonder`](#searchersyncponder) so a `ponderhit` is noticed within 2048 nodes.
+Called every 2048 nodes (`TIME_CHECK_MASK`) from [`search`](#searchersearch) and
+[`qsearch`](#searcherqsearch).
+
+### `Searcher::syncPonder` (private)
+
+Leave ponder mode once the UCI thread has moved [`state_`](#enum-class-searchstate) from
+`Pondering` to `Running`: clears `pondering_` and sets `ponderDiscountMs_ = elapsed *
+(1000 - ponderCreditPermille) / 1000`, so from here on [`clockMs`](#searcherclockms)
+charges only `ponderCreditPermille` of the time already pondered. A no-op when not
+pondering or before the hit. Called from [`checkStop`](#searchercheckstop) and once per
+completed iteration in [`think`](#searcherthink); the hit is therefore applied at most
+2048 nodes (well under a millisecond) late.
+
+### `Searcher::budgetSpent` (private)
+
+Return `bool` — whether this move's clock budget is used up. Always `false` without a
+clock (`useTime_` off) or while pondering. Otherwise `true` when
+[`clockMs`](#searcherclockms) has reached the hard limit, **or** when the in-progress
+iteration began (in budget time, `iterationStartMs_ - ponderDiscountMs_`) at or past
+the soft limit. Outside pondering an iteration always begins before the soft limit (the
+soft check ends the loop first), so the second clause only fires right after a
+`ponderhit`: it drops a deep iteration the clock would never have started and plays the
+last completed one at once. Since the budget always charges at least the real time since
+the `ponderhit`, the hard limit's never-flag cap still holds in wall-clock terms.
+
+### `Searcher::awaitRelease` (private)
+
+Block until the GUI releases the search: while [`state_`](#enum-class-searchstate) is
+`Pondering`, or — when `infinite` — `Running`. Uses C++20 `std::atomic::wait`, woken by
+the UCI thread's `notify_all()` on every state change, so it burns no CPU. Returns
+immediately for an ordinary timed/depth/node search.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `infinite` | `bool` | [`Limits::infinite`](#struct-limits): also wait out `Running` until `stop`. |
 
 ### `Searcher::elapsedMs` (private)
 
-Return `int64_t` — milliseconds since `start_`. Trivial.
+Return `int64_t` — milliseconds since `start_` (the `go`). Used for `info` timing. Trivial.
+
+### `Searcher::clockMs` (private)
+
+Return `int64_t` — the time charged to this move's budget: `elapsedMs() -
+ponderDiscountMs_`. Equal to `elapsedMs()` for a search that never pondered. All soft /
+hard limit checks use it.
