@@ -55,6 +55,7 @@ enforced by [`coerce_setting`](#coerce_setting).
 | `replay_enabled` | `true` | Replay won games against the same opponent. |
 | `replay_min_result` | `1.0` | Minimum result of a game to replay (`0.5` would also replay draws). |
 | `replay_same_speed_only` | `true` | Replay only games from the same speed bucket. |
+| `replay_max_loss` | `0.05` | Eval gate for replay: the most expected score a replayed move may give up against Stockfish's best move in that position. A move without an eval is not replayed (see [`replay_move`](selector.py.md#replay_move)). |
 | `ingest_interval_min` | `10` | Minutes between periodic ingests. |
 | `pause_analysis_during_games` | `false` | Pause Stockfish completely while a lichess game is live. When false, it keeps running with `stockfish_threads_in_game` threads. |
 | `stockfish_threads` / `stockfish_hash_mb` | `8` / `256` | Stockfish resources between games. Changing them restarts Stockfish. |

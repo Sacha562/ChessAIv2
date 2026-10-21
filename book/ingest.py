@@ -120,6 +120,7 @@ def exit_ply(conn: sqlite3.Connection, game: ParsedGame, max_book_ply: int) -> t
 def store_game(conn: sqlite3.Connection, game: ParsedGame, settings: dict) -> None:
     """Insert one game (replacing any earlier copy) and queue its analysis."""
     max_book_ply = int(settings["max_book_ply"])
+    replayable = game.result >= float(settings["replay_min_result"])
     exit_at, exit_source = exit_ply(conn, game, max_book_ply)
     conn.execute("DELETE FROM game_moves WHERE game_id = ?", (game.id,))
     conn.execute(
@@ -137,7 +138,7 @@ def store_game(conn: sqlite3.Connection, game: ParsedGame, settings: dict) -> No
         by_us = board.turn == game.color
         conn.execute("INSERT INTO game_moves(game_id, ply, key, move, by_us) VALUES(?,?,?,?,?)",
                      (game.id, ply, key, move.uci(), int(by_us)))
-        if by_us and ply < max_book_ply and worth_analysing(conn, key, ply, settings):
+        if by_us and ply < max_book_ply and (replayable or worth_analysing(conn, key, ply, settings)):
             queue_candidates(conn, board, ply)
         board.push(move)
     db.enqueue(conn, "signal", game.id, PRIORITY_SIGNAL)

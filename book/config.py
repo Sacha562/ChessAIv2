@@ -65,6 +65,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "replay_enabled": True,
     "replay_min_result": 1.0,
     "replay_same_speed_only": True,
+    "replay_max_loss": 0.05,  # expected score a replayed move may give up vs Stockfish's best
     # Scheduling
     "ingest_interval_min": 10,
     "pause_analysis_during_games": False,

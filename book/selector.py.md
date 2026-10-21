@@ -10,6 +10,9 @@ Chooses the book move for one live request from the lichess-bot shim
    by default) has exactly the current move list as its prefix, play its next
    move. This works at any ply, beyond the book horizon too, until the opponent
    deviates. Deterministic bots repeat their games, so a win often repeats.
+   An **eval gate** checks the move first: Stockfish must rate it within
+   `replay_max_loss` of the best move here. A win can come despite a weak move,
+   and the gate keeps the book from repeating that move.
 2. **Book:** before `max_book_ply`, Thompson-sample among the candidates
    playable against this opponent ([stats.py.md](stats.py.md)).
 3. **Nothing:** the engine searches.
@@ -47,7 +50,8 @@ the dashboard explorer, so the dashboard shows exactly what the selector sees.
 
 `move` (UCI or `None`), `source`, `detail` (dict). Sources:
 - `prep`: a per-opponent prepared move
-- `replay`: `detail.game` is the replayed game's id
+- `replay`: `detail.game` is the replayed game's id, `detail.loss` the move's
+  expected-score loss against the best move
 - `book`: `detail` holds `tier_limit` and `posterior_mean`
 - `miss`
 - `horizon`
@@ -107,14 +111,47 @@ next tier. A candidate is **playable** if:
 The `opponent` stats field keeps only real games, for display. An empty opponent means every game
 counts as pooled, which is the dashboard's pooled view.
 
-### `replay_move`
+### `_won_continuations`
 
 Finds won games against the opponent with our color, `result ≥ replay_min_result`,
 more plies than played so far, and (when `replay_same_speed_only`) the same
-speed. Most recent first; the first whose move prefix equals the current moves
-wins.
+speed, whose move prefix equals the current moves.
 
-**Returns:** `(next move UCI, game id)` or `None`.
+**Returns:** `(next move UCI, game id)` for each, most recent game first.
+
+### `replay_loss`
+
+Reads the eval gate's input from `candidates`: the best `sf_expected` stored for
+the position minus the `sf_expected` of `move`. [`run_candidates`](worker.py.md#run_candidates)
+evaluates every move we have played in a position, so an analysed position
+normally holds the replayed move too.
+
+**Returns:** the loss (≥ 0 in expected score), or `None` if `move` has no eval here.
+
+### `_queue_replay_check`
+
+Asks the worker for the missing eval at priority 0. An unanalysed position is
+queued through [`queue_candidates`](ingest.py.md#queue_candidates). An analysed
+one whose analysis predates the won game is force-re-queued
+([`enqueue`](db.py.md#enqueue)), and the re-run evaluates the replayed move.
+Commits.
+
+### `replay_move`
+
+Goes through the [`_won_continuations`](#_won_continuations), newest game first.
+For each distinct legal move:
+- **no eval** ([`replay_loss`](#replay_loss) is `None`): skipped this time, and
+  [`_queue_replay_check`](#_queue_replay_check) queues the position
+- **loss > `replay_max_loss`:** skipped, so an older win with a better move can
+  still be replayed
+- **otherwise:** played
+
+When nothing passes, [`choose`](#choose) falls through to the book, or to the
+engine beyond the horizon.
+
+**Returns:** `(move UCI, game id, loss)` or `None`.
+
+**Side Effects:** may queue analysis jobs; commits when it does.
 
 ### `_book_pick`
 
@@ -128,7 +165,7 @@ Thompson-samples, logs `book`, and returns the move.
 
 Entry point. Rebuilds the board (`invalid` on failure), returns `not_our_turn`
 if we are not to move, plays a legal prep move for (opponent, position) if one
-exists ([`prep_move`](prep.py.md#prep_move)), tries replay (when `replay_enabled`), returns `horizon`
+exists ([`prep_move`](prep.py.md#prep_move)), tries [replay](#replay_move) (when `replay_enabled`), returns `horizon`
 at or beyond `max_book_ply`, else [`_book_pick`](#_book_pick). It never raises
 for a bad request.
 

@@ -2,7 +2,7 @@
 
 Order of precedence: (1) a prep move set for this opponent in this position;
 (2) replay a won game against this opponent whose move list matches the current
-game so far; (3) inside the book horizon, Thompson-sample among the playable
+game so far, if Stockfish rates the replayed move close enough to the best; (3) inside the book horizon, Thompson-sample among the playable
 candidates of this position; (4) otherwise return no move so the engine
 searches. Every served move and every miss is logged to
 ``book_events`` (the source of each game's book-exit ply), and a miss on an
@@ -166,12 +166,13 @@ def analyse_position(conn: sqlite3.Connection, board: chess.Board, opponent: str
                             widened=bool(position and position["widened"]))
 
 
-def replay_move(conn: sqlite3.Connection, request: Request, settings: dict) -> tuple[str, str] | None:
-    """(move, won game id) continuing a won game whose moves match so far, else None.
+def _won_continuations(conn: sqlite3.Connection, request: Request,
+                       settings: dict) -> list[tuple[str, str]]:
+    """(next move, game id) of every won game whose moves match so far, newest first.
 
     Matches games against this opponent with our color and a result of at
-    least ``replay_min_result``; the most recent such game wins ties. With
-    ``replay_same_speed_only`` the game must also share this speed.
+    least ``replay_min_result``. With ``replay_same_speed_only`` the game must
+    also share this speed.
     """
     sql = ("SELECT id, moves FROM games WHERE opponent = ? AND color = ? AND result >= ? "
            "AND n_plies > ?")
@@ -181,10 +182,63 @@ def replay_move(conn: sqlite3.Connection, request: Request, settings: dict) -> t
         sql += " AND speed = ?"
         params.append(request.speed)
     ply = len(request.moves)
+    continuations = []
     for row in conn.execute(sql + " ORDER BY created_at DESC", params):
         played = row["moves"].split()
         if tuple(played[:ply]) == request.moves:
-            return played[ply], row["id"]
+            continuations.append((played[ply], row["id"]))
+    return continuations
+
+
+def replay_loss(conn: sqlite3.Connection, key: int, move: str) -> float | None:
+    """Expected-score loss of ``move`` against the best analysed move in ``key``.
+
+    None when Stockfish has not evaluated ``move`` in this position yet.
+    """
+    row = conn.execute("SELECT MAX(sf_expected) AS best, "
+                       "MAX(CASE WHEN move = ? THEN sf_expected END) AS ours "
+                       "FROM candidates WHERE key = ?", (move, key)).fetchone()
+    if row["best"] is None or row["ours"] is None:
+        return None
+    return float(row["best"]) - float(row["ours"])
+
+
+def _queue_replay_check(conn: sqlite3.Connection, board: chess.Board, ply: int) -> None:
+    """Queue Stockfish on ``board`` so its replay moves get an eval next time.
+
+    An analysed position is re-queued: the run evaluates every move we have
+    played there, which includes the won game's move.
+    """
+    key = db.position_key(board)
+    row = conn.execute("SELECT analysed_at FROM positions WHERE key = ?", (key,)).fetchone()
+    if row is None or row["analysed_at"] is None:
+        ingest.queue_candidates(conn, board, ply, priority=ingest.PRIORITY_MISS)
+    else:
+        db.enqueue(conn, "candidates", str(key), ingest.PRIORITY_MISS, fen=board.fen(), force=True)
+    conn.commit()
+
+
+def replay_move(conn: sqlite3.Connection, request: Request, board: chess.Board,
+                settings: dict) -> tuple[str, str, float] | None:
+    """(move, won game id, loss) continuing a won game whose moves match so far, else None.
+
+    Each distinct legal continuation, newest game first, must pass the eval
+    gate: Stockfish rates it at most ``replay_max_loss`` expected score below
+    the best move here. A continuation without an eval is skipped this time and
+    its position is queued for analysis.
+    """
+    key = db.position_key(board)
+    max_loss = float(settings["replay_max_loss"])
+    tried: set[str] = set()
+    for move, game_id in _won_continuations(conn, request, settings):
+        if move in tried or chess.Move.from_uci(move) not in board.legal_moves:
+            continue
+        tried.add(move)
+        loss = replay_loss(conn, key, move)
+        if loss is None:
+            _queue_replay_check(conn, board, len(request.moves))
+        elif loss <= max_loss:
+            return move, game_id, loss
     return None
 
 
@@ -228,10 +282,11 @@ def choose(conn: sqlite3.Connection, request: Request, settings: dict,
         _log(conn, request, key, prepared, "prep")
         return Decision(prepared, "prep")
     if settings["replay_enabled"]:
-        replay = replay_move(conn, request, settings)
-        if replay is not None and chess.Move.from_uci(replay[0]) in board.legal_moves:
-            _log(conn, request, key, replay[0], "replay")
-            return Decision(replay[0], "replay", {"game": replay[1]})
+        replay = replay_move(conn, request, board, settings)
+        if replay is not None:
+            move, game_id, loss = replay
+            _log(conn, request, key, move, "replay")
+            return Decision(move, "replay", {"game": game_id, "loss": loss})
     if len(request.moves) >= int(settings["max_book_ply"]):
         return Decision(None, "horizon")
     return _book_pick(conn, request, board, key, settings, rng)

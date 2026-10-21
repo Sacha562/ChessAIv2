@@ -95,6 +95,9 @@ lichess <──games/moves── [lichess-bot]  smikkelbot container
    beat everything else, for opponents with a known fixed repertoire.
 8. **Replay.** If we beat this opponent before in a game whose moves match the
    current game so far, that game's next move is played, for the whole game.
+   An eval gate checks each replayed move first: Stockfish must rate it within
+   `replay_max_loss` of the best move, so a win that came despite a weak move
+   does not repeat the weak move ([`replay_move`](selector.py.md#replay_move)).
 
 ## How to Build & Run
 

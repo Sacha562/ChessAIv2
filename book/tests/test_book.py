@@ -145,12 +145,20 @@ class IngestTests(DbTestCase):
 
     def test_deep_one_off_positions_not_queued(self) -> None:
         self.settings["candidate_always_ply"] = 2
-        self.store(raw_game("a", "e4 e5 Nf3 Nc6 Bb5", True, "white"))
+        self.store(raw_game("a", "e4 e5 Nf3 Nc6 Bb5", True, "black"))
         queued = self.conn.execute("SELECT COUNT(*) FROM analysis_queue "
                                    "WHERE kind = 'candidates'").fetchone()[0]
         self.assertEqual(queued, 1)
-        self.store(raw_game("b", "e4 e5 Nf3 Nc6 Bc4", True, "white", created_at=2))
+        self.store(raw_game("b", "e4 e5 Nf3 Nc6 Bc4", True, "black", created_at=2))
         self.assertEqual(ingest.rebuild_candidate_queue(self.conn, self.settings), 3)
+
+    def test_won_game_queues_every_book_position(self) -> None:
+        self.settings["candidate_always_ply"] = 2
+        self.settings["max_book_ply"] = 4
+        self.store(raw_game("a", "e4 e5 Nf3 Nc6 Bb5 a6", True, "white"))
+        queued = self.conn.execute("SELECT COUNT(*) FROM analysis_queue "
+                                   "WHERE kind = 'candidates'").fetchone()[0]
+        self.assertEqual(queued, 2)
 
     def test_exit_inferred_without_log(self) -> None:
         self.store(raw_game("a", "e4 e5 Nf3 Nc6", True, "white"))
@@ -190,10 +198,42 @@ class SelectorTests(DbTestCase):
         self.assertEqual((job["kind"], job["priority"]), ("candidates", ingest.PRIORITY_MISS))
 
     def test_replay_won_game(self) -> None:
+        self.add_candidate(("d2d4", "d7d5"), "c2c4", 0, 0.55)
+        self.add_candidate(("d2d4", "d7d5"), "g1f3", 0, 0.56)
         self.store(raw_game("won", "d4 d5 c4 e6 Nc3", True, "white"))
         decision = selector.choose(self.conn, self.request(("d2d4", "d7d5")), self.settings,
                                    random.Random(1))
         self.assertEqual((decision.move, decision.source), ("c2c4", "replay"))
+        self.assertAlmostEqual(decision.detail["loss"], 0.01)
+
+    def test_replay_gate_skips_losing_move(self) -> None:
+        self.add_candidate(("d2d4", "d7d5"), "c2c4", 0, 0.55)
+        self.add_candidate(("d2d4", "d7d5"), "g2g4", 99, 0.45)
+        self.store(raw_game("won", "d4 d5 g4", True, "white"))
+        decision = selector.choose(self.conn, self.request(("d2d4", "d7d5")), self.settings,
+                                   random.Random(1))
+        self.assertEqual((decision.move, decision.source), ("c2c4", "book"))
+
+    def test_replay_gate_falls_back_to_older_win(self) -> None:
+        self.add_candidate(("d2d4", "d7d5"), "c2c4", 0, 0.55)
+        self.add_candidate(("d2d4", "d7d5"), "g2g4", 99, 0.45)
+        self.store(raw_game("old", "d4 d5 c4", True, "white", created_at=1))
+        self.store(raw_game("new", "d4 d5 g4", True, "white", created_at=2))
+        decision = selector.choose(self.conn, self.request(("d2d4", "d7d5")), self.settings,
+                                   random.Random(1))
+        self.assertEqual((decision.move, decision.source), ("c2c4", "replay"))
+        self.assertEqual(decision.detail["game"], "old")
+
+    def test_unevaluated_replay_skipped_and_queued(self) -> None:
+        moves = ("d2d4", "d7d5")
+        self.add_candidate(moves, "c2c4", 0, 0.55)
+        self.store(raw_game("won", "d4 d5 Nf3", True, "white"))
+        decision = selector.choose(self.conn, self.request(moves), self.settings, random.Random(1))
+        self.assertEqual((decision.move, decision.source), ("c2c4", "book"))
+        key = db.position_key(selector.board_from_moves(moves))
+        job = self.conn.execute("SELECT status, priority FROM analysis_queue "
+                                "WHERE kind = 'candidates' AND target = ?", (str(key),)).fetchone()
+        self.assertEqual((job["status"], job["priority"]), ("queued", ingest.PRIORITY_MISS))
 
     def test_no_replay_of_lost_game_or_other_opponent(self) -> None:
         self.store(raw_game("lost", "d4 d5 c4", True, "black"))

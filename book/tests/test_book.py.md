@@ -60,7 +60,8 @@ book/.venv/Scripts/python -m unittest book.tests.test_book
 - `test_parse_result_from_our_side`: color, result and lowercase opponent id when we are black and win.
 - `test_skips_variants_and_aborts`: chess960 and aborted games are rejected.
 - `test_store_queues_candidates_and_signal`: storing a game queues both job kinds and records our moves as `by_us`.
-- `test_deep_one_off_positions_not_queued`: the visit policy queues only shallow positions until a deeper one repeats; `rebuild_candidate_queue` re-plans the same set.
+- `test_deep_one_off_positions_not_queued`: for lost games, the visit policy queues only shallow positions until a deeper one repeats; `rebuild_candidate_queue` re-plans the same set.
+- `test_won_game_queues_every_book_position`: a won game queues all of our positions before `max_book_ply`, deep ones included, so its replay moves get evals.
 - `test_exit_inferred_without_log`: without book events, exit = `min(max_book_ply, n_plies)`.
 - `test_exit_from_served_log`: a served first move puts the exit at our second move (ply 2).
 
@@ -69,7 +70,10 @@ book/.venv/Scripts/python -m unittest book.tests.test_book
 - `test_book_pick_from_candidates`: a single tier-0 candidate is served with source `book`.
 - `test_locked_tier_not_played`: a tier-1 move is never chosen while tier 0 is fresh (20 seeds).
 - `test_miss_queues_position`: no candidates means a `miss` and a priority-0 `candidates` job.
-- `test_replay_won_game`: a won game with a matching prefix is replayed.
+- `test_replay_won_game`: a won game with a matching prefix is replayed when its move is within the eval gate; `detail.loss` holds the gap to the best move.
+- `test_replay_gate_skips_losing_move`: a won game's move rated 0.10 below the best is not replayed, and the book move is played instead.
+- `test_replay_gate_falls_back_to_older_win`: when the newest win's move fails the gate, an older win with a good move is replayed.
+- `test_unevaluated_replay_skipped_and_queued`: a replay move without an eval falls back to the book, and the position is re-queued for analysis at priority 0.
 - `test_no_replay_of_lost_game_or_other_opponent`: losses and other opponents' wins are not replayed.
 - `test_horizon`: at `max_book_ply` the book returns `horizon`.
 - `test_not_our_turn`: a request on the opponent's move returns no move.

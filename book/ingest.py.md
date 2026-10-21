@@ -80,7 +80,10 @@ The eval-signal window is measured from this ply ([scoring.py.md](scoring.py.md)
 
 Inserts or replaces one game. Deletes and re-inserts its `game_moves`, queues
 candidate analysis for each of our positions before `max_book_ply` that passes
-[`worth_analysing`](#worth_analysing), queues the game's `signal` job, and for
+[`worth_analysing`](#worth_analysing) (every such position of a game with
+`result ≥ replay_min_result`, so the replay eval gate in
+[`replay_move`](selector.py.md#replay_move) finds its moves already evaluated),
+queues the game's `signal` job, and for
 predictable opponents a model `deepen` job
 ([`queue_deepen_if_predictable`](#queue_deepen_if_predictable)).
 
