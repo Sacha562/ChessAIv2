@@ -1,8 +1,39 @@
 # High-Performance Chess AI in C++ — Component Plan & Decision Document
 
-**Status:** Research complete. Meta-direction locked (2026-07-02): **top-tier / maximal** ambition, build for **this PC only** (`-march=native`, single binary), **Clang** release builds, **"you choose, I build."** Per-component selections still open — see the Decision Checklist.
+**Status (2026-10-21):** Phases 0 → 1d are **done**; the latest release is **v0.1d** (`f5ef9d5`). **Next: Phase 2 (NNUE).** See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
+**Meta-direction (locked 2026-07-02):** **top-tier / maximal** ambition, **Clang** builds, **"you choose, I build."** The recommended defaults were accepted wholesale; the per-component analysis below is kept as the design record.
 **Board/move-gen foundation:** [Disservin `chess-library`](https://github.com/Disservin/chess-library) (already chosen).
 **Primary research source:** [Chess Programming Wiki](https://www.chessprogramming.org) (CPW), cross-checked with Stockfish/OpenBench docs and the modern engine-dev ecosystem.
+
+---
+
+## Project status
+
+*Kept current as phases land. The rest of the document is the original design analysis; this section and the ✅ / ⏳ marks in [Part 8](#part-8--recommended-roadmap-phased) record what was actually built.*
+
+### Releases
+
+Every gain below is from self-play SPRT/A-B tests (fastchess, UHO opening book, 1 thread, mostly STC 10+0.1). Numbers are measured against the previous version at the time, so they **do not add up** to a rating.
+
+| Release | Commit | Phase | What it added | Measured |
+|---|---|---|---|---|
+| v0.1a | `cb890fd` | 1a — search core | Soft/hard time management, transposition table, SEE, quiescence, MVV-LVA + TT-move ordering, PVS; first SPSA pass | TT **+326**, SEE + qsearch + ordering **+428**, time mgmt **+28** |
+| v0.1b | `24febd8` | 1b — ordering & pruning | Killers, history, countermove, IIR, staged move picking, NMP, LMR, RFP, futility, LMP, aspiration windows, check extension | Full stack **+545** vs v0.1a; SPSA-tuned margins a further **+82** |
+| v0.1c | `bea41e6` | 1c — hand-crafted eval | PeSTO-seeded PSQT + tapered eval, mobility, pawn structure, piece terms, king safety + pawn shield/storm; singular extensions, continuation history; Texel tuner | PSQT **+451**, mobility **+58**, pawns + pieces **+25**, king safety **+13**, shield **+6**, storm **+4**, singular **+24**, cont-hist **+7**, search re-tune **+26** (LTC) |
+| v0.1d | `f5ef9d5` | 1d — search selectivity | Correction history, history-modulated LMR, re-tuned LMR curve + eval-gated margins | Corrhist + history-LMR **+32.5** vs v0.1c; re-tune **+6.1** (LTC) |
+
+Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/releases).
+
+### Where the build departed from this plan
+
+- **Release binaries are portable, not `-march=native`.** Each release ships four builds: Linux/Windows × `avx2` (magic bitboards, any AVX2 CPU) / `bmi2` (PEXT sliders). Local development builds still use `-march=native`.
+- **Development runs in WSL2 (Ubuntu)**, because Windows Smart App Control blocks unsigned self-built `.exe`s (§0.3).
+- **Phase 1d was re-scoped.** Instead of infrastructure polish, it became search selectivity that keeps paying off after NNUE (correction history, history-based LMR/pruning, capture history, razoring, ProbCut). The infrastructure items (Lazy SMP, Syzygy, stability time management, MultiPV) are **still open**; see Part 8.
+- **Texel tuning of the PeSTO tables lost Elo.** Re-fitting already-strong PSQTs on ~2000-Elo self-play regressed twice (−125, −55 Elo); the gains came from adding new terms at hand-picked seeds. The tuner stays as infrastructure for new terms and for NNUE data generation (§18).
+- **Some §15 / §10 options are wired but shipped off** after neutral A/B results: history pruning (neutral at two margins), capture history (+2 ± 6). Razoring and ProbCut are wired but untested; revisit after NNUE.
+- **No pawn hash yet** (§17); the pawn terms are computed per evaluation.
+- **OpenBench is self-hosted in WSL** and used for SPSA tuning only; SPRT tests run locally with fastchess (§29).
+- **`Threads` is accepted but ignored**: search is single-threaded until Lazy SMP lands.
 
 ---
 
@@ -22,6 +53,7 @@ The engine is built in **layers that multiply each other**. Move ordering makes 
 
 ## Table of Contents
 
+- **Project status** — releases, measured Elo, deviations from the plan
 - **Part 0 — Meta / Project-level decisions**
   - 0.1 Target strength & scope · 0.2 Language standard · 0.3 Toolchain & compiler · 0.4 Build flags & binary strategy
 - **Part 1 — Board & Foundation**
@@ -524,28 +556,33 @@ Not optional — this is *how you make the engine strong.* You cannot eyeball El
 
 # Part 8 — Recommended roadmap (phased)
 
-Each phase produces a working, playable engine that's stronger than the last. Test continuously.
+Each phase produces a working, playable engine that's stronger than the last. Test continuously. ✅ = done, ⏳ = open. Measured results are in [Project status](#project-status).
 
-**Phase 0 — Skeleton (a few days)**
+**Phase 0 — Skeleton (a few days)** ✅
 Integrate `chess.hpp`; CMake + Makefile; UCI loop (`position`/`go`/`bestmove`); fixed-depth negamax + material-only eval; perft harness green; `bench` command. *Deliverable: a legal-move-playing UCI engine.*
 
-**Phase 1a — Search core (1–2 weeks)**
+**Phase 1a — Search core (1–2 weeks)** ✅ *v0.1a*
 Iterative deepening; fail-soft alpha-beta → PVS; quiescence (captures + SEE-prune + delta); SEE; transposition table (bucketed, lock-less, aged); MVV-LVA + TT-move ordering; soft/hard time management. *Deliverable: a tactically competent engine (~2000+).*
 
-**Phase 1b — Ordering & pruning (1–2 weeks)**
+**Phase 1b — Ordering & pruning (1–2 weeks)** ✅ *v0.1b*
 Killers, history (+aging/malus), countermove, IIR; staged movegen; NMP; LMR; RFP + futility + LMP; aspiration windows; check extension. Each behind SPRT. *Deliverable: a strong search (~2400–2600).*
 
-**Phase 1c — Evaluation (HCE) & tuning (2–4 weeks)**
+**Phase 1c — Evaluation (HCE) & tuning (2–4 weeks)** ✅ *v0.1c*
 PSQT + tapered eval → pawn hash + pawn structure + mobility + piece terms → king safety; Texel-tune weights; SPSA-tune search params; continuation history; singular extensions. *Deliverable: a strong, tuned HCE engine (~2700–2900).*
+*As built:* everything except the pawn hash. Texel tuning of the PSQTs was dropped after it regressed; the tuner is kept for new terms and NNUE data.
 
-**Phase 1d — Infrastructure polish (days)**
-Lazy SMP (`Threads`); Syzygy 3–4–5 via Fathom (`SyzygyPath`); stability-based time management; MultiPV; optional Polyglot book. *Deliverable: a complete, multi-threaded, tablebase-aware HCE engine.*
+**Phase 1d — Search selectivity (re-scoped)** ✅ *v0.1d*
+Correction history, history-modulated LMR, history pruning, capture history, razoring, ProbCut — each behind its own UCI toggle and A/B'd against v0.1c — then an SPSA re-tune of the LMR curve and eval-gated margins. Shipped on: correction history + history-LMR. Wired but off: history pruning, capture history (neutral), razoring, ProbCut (untested). *Deliverable: a sharper search whose gains carry over to NNUE.*
 
-**Phase 2 — NNUE (1–3 months)**
+**Phase 1e — Infrastructure polish (days)** ⏳ *originally Phase 1d*
+Lazy SMP (`Threads`); Syzygy 3–4–5 via Fathom (`SyzygyPath`); stability-based time management; MultiPV; optional Polyglot book; pawn hash. *Deliverable: a complete, multi-threaded, tablebase-aware engine.* Can run before or after Phase 2: Lazy SMP adds nothing at the 1-thread conditions used for testing, so it mainly matters for real play.
+
+**Phase 2 — NNUE (1–3 months)** ⏳ *next*
 Incremental accumulator on make/unmake; AVX2 kernels; self-play data generation from the HCE engine (~300–600M positions); train a `768→512/1024×2` SCReLU net with 8 buckets via **bullet**; swap eval to NNUE with a minimal HCE fallback; iterate (bigger nets, HalfKA, more data, AVX-512). *Deliverable: a master-class engine (~3000–3400+).*
+*Open question before starting:* the trainer. `bullet` is CUDA-first and the GPU here is an AMD RX 6800 XT (see §20). Check `bullet`'s current AMD support, else use native-Linux ROCm + `nnue-pytorch`, a rented NVIDIA GPU, or CPU training for a small first net (768→128/256).
 
 **Phase 3 — Ongoing (optional)**
-Bigger nets, PGO/ISA-variant release binaries, 6-man tablebases, OpenBench-driven parameter tuning, pondering, Chess960.
+Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering, Chess960.
 
 ---
 
@@ -593,6 +630,8 @@ If you just want my complete recommended set to accept wholesale, it's:
 
 # Part 10 — Open questions for you
 
+*Answered 2026-07-02* — top-tier / maximal target; GPU is an AMD Radeon RX 6800 XT. Distribution later widened from "this PC only" to portable GitHub release binaries. Kept below for the record.
+
 Your answers will let me tailor the recommendations (especially Parts 0 and 5):
 
 1. **Target strength / ambition (Component 0.1)?** Learning-grade HCE, strong HCE club engine, or all-the-way-to-NNUE? This gates ~⅓ of the plan.
@@ -609,6 +648,8 @@ Your answers will let me tailor the recommendations (especially Parts 0 and 5):
 ---
 
 # Decision Checklist
+
+*Resolved 2026-07-02: "go with your defaults" (Part 9), with target D. Deviations since then are listed under [Project status](#project-status).*
 
 Fill in a pick per line (or write "default"):
 
