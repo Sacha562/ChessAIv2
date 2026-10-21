@@ -21,7 +21,7 @@ import chess
 import chess.engine
 
 from lib import model
-from lib.engine_wrapper import UCIEngine
+from lib.engine_wrapper import MinimalEngine, UCIEngine
 from lib.lichess_types import COMMANDS_TYPE, MOVE, OPTIONS_GO_EGTB_TYPE
 from lib.config import Configuration
 
@@ -31,6 +31,11 @@ DEFAULT_BOOK_SERVER = "http://book:8765"  # compose service name
 DEFAULT_TIMEOUT_S = 1.0
 NOTIFY_TIMEOUT_S = 2.0
 START_FENS = (None, "startpos", chess.STARTING_FEN)
+
+
+class ExampleEngine(MinimalEngine):
+    """Unused placeholder: lichess-bot's ``test_bot/homemade.py`` imports
+    ``ExampleEngine`` from this module whenever a homemade engine is loaded."""
 
 
 class BookedEngine(UCIEngine):

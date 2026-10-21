@@ -34,6 +34,14 @@ for the full config.
 | `NOTIFY_TIMEOUT_S` | `2.0` | Timeout for game start/end notices. |
 | `START_FENS` | `None`, `"startpos"`, standard FEN | Games from these start positions use the book. |
 
+### `class ExampleEngine(MinimalEngine)`
+
+Empty placeholder. Whenever lichess-bot loads a homemade engine it also imports
+its own `test_bot/homemade.py`, which does `from homemade import ExampleEngine`.
+Because this file *replaces* the stock `homemade.py`, it must define the name, or
+lichess-bot crashes at start-up with `ImportError: cannot import name
+'ExampleEngine'`.
+
 ### `class BookedEngine(UCIEngine)`
 
 Selected with `engine.protocol: homemade` and `engine.name: BookedEngine`.
