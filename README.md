@@ -9,11 +9,12 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.1d (Phase 1d done) · next: NNUE
+## Status — v0.1e (pondering) · next: NNUE
 
 | Release | Phase | Highlights |
 |---|---|---|
-| [v0.1d](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.1d) | 1d — search selectivity | Correction history + history-modulated LMR (**+32.5 Elo** vs v0.1c), SPSA re-tune (**+6.1** at LTC) |
+| [v0.1e](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.1e) | 3 — pondering | `go ponder` / `ponderhit` with full-PV `bestmove … ponder …` (**+131 Elo** vs ponder off), instant reply to a forced move |
+| v0.1d | 1d — search selectivity | Correction history + history-modulated LMR (**+32.5 Elo** vs v0.1c), SPSA re-tune (**+6.1** at LTC) |
 | v0.1c | 1c — hand-crafted eval | PSQT + tapered eval, mobility, pawn structure, piece terms, king safety, singular extensions |
 | v0.1b | 1b — ordering & pruning | Killers/history/countermove, NMP, LMR, RFP, futility, LMP, aspiration (**+545** vs v0.1a) |
 | v0.1a | 1a — search core | TT, SEE, quiescence, PVS, time management |
@@ -33,7 +34,9 @@ numbers are in [PLAN.md](PLAN.md#project-status).
   piece-square tables, mobility, pawn structure, bishop pair / rooks / outposts,
   king safety with pawn shield and storm.
 - **Infrastructure:** bucketed lock-less transposition table, soft/hard time
-  management, deterministic `bench`, `perft` suite.
+  management (a forced move is answered at once), pondering (`go ponder` /
+  `ponderhit`, full-PV `info` lines, `bestmove … ponder …`), deterministic `bench`,
+  `perft` suite.
 - **Not yet:** multi-threading (`Threads` is accepted but ignored), tablebases,
   MultiPV, NNUE. See the roadmap in [PLAN.md](PLAN.md#part-8--recommended-roadmap-phased).
 
@@ -122,8 +125,8 @@ quit
 
 | Group | Options |
 |---|---|
-| General | `Hash` (MB, default 16), `Threads` (accepted, not used yet) |
-| Time | `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo` |
+| General | `Hash` (MB, default 16), `Threads` (accepted, not used yet), `Ponder` (default off; the GUI enables it) |
+| Time | `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille` (share of ponder time not charged to the clock after a `ponderhit`, default 500) |
 | Feature toggles (0/1) | `UseKillers`, `UseHistory`, `UseCountermove`, `UseContHist`, `UseIIR`, `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`, `UseCheckExt`, `UseSingular`, `UseAspiration`, `UseHistLmr`, `UseCorrHist` (all on); `UseHistPrune`, `UseCapHist`, `UseRazoring`, `UseProbCut` (off) |
 | Tunable margins | `LmrBase`, `LmrDivisor`, `NmpBase`, `NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `LmpBase`, `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, `HistPruneMargin`, `HistLmrDiv`, `RazorBase`, `RazorMargin`, `ProbCutMinDepth`, `ProbCutMargin`, `AspirationDelta`, `Tempo`, `DeltaMargin`, `EndgamePieces` |
 

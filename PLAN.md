@@ -1,6 +1,6 @@
 # High-Performance Chess AI in C++ — Component Plan & Decision Document
 
-**Status (2026-10-21):** Phases 0 → 1d are **done**; the latest release is **v0.1d** (`f5ef9d5`). **Next: Phase 2 (NNUE).** See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
+**Status (2026-10-21):** Phases 0 → 1d are **done**; the latest release is **v0.1e** (`8014680`), which adds pondering ahead of NNUE. **Next: Phase 2 (NNUE).** See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
 **Meta-direction (locked 2026-07-02):** **top-tier / maximal** ambition, **Clang** builds, **"you choose, I build."** The recommended defaults were accepted wholesale; the per-component analysis below is kept as the design record.
 **Board/move-gen foundation:** [Disservin `chess-library`](https://github.com/Disservin/chess-library) (already chosen).
 **Primary research source:** [Chess Programming Wiki](https://www.chessprogramming.org) (CPW), cross-checked with Stockfish/OpenBench docs and the modern engine-dev ecosystem.
@@ -21,6 +21,7 @@ Every gain below is from self-play SPRT/A-B tests (fastchess, UHO opening book, 
 | v0.1b | `24febd8` | 1b — ordering & pruning | Killers, history, countermove, IIR, staged move picking, NMP, LMR, RFP, futility, LMP, aspiration windows, check extension | Full stack **+545** vs v0.1a; SPSA-tuned margins a further **+82** |
 | v0.1c | `bea41e6` | 1c — hand-crafted eval | PeSTO-seeded PSQT + tapered eval, mobility, pawn structure, piece terms, king safety + pawn shield/storm; singular extensions, continuation history; Texel tuner | PSQT **+451**, mobility **+58**, pawns + pieces **+25**, king safety **+13**, shield **+6**, storm **+4**, singular **+24**, cont-hist **+7**, search re-tune **+26** (LTC) |
 | v0.1d | `f5ef9d5` | 1d — search selectivity | Correction history, history-modulated LMR, re-tuned LMR curve + eval-gated margins | Corrhist + history-LMR **+32.5** vs v0.1c; re-tune **+6.1** (LTC) |
+| v0.1e | `8014680` | 3 — pondering (pulled forward) | `go ponder` / `ponderhit`, triangular PV table (full-PV `info`, `bestmove … ponder …`), `PonderCreditPermille`; forced moves under a clock searched only to depth 4 | Ponder on vs off **+130.9 ± 42.4** (10+0.1, python-chess runner); credit 0 / 1000 vs 500 **−3.4 / +3.7** (neutral, kept 500) |
 
 Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/releases).
 
@@ -33,6 +34,7 @@ Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/
 - **Some §15 / §10 options are wired but shipped off** after neutral A/B results: history pruning (neutral at two margins), capture history (+2 ± 6). Razoring and ProbCut are wired but untested; revisit after NNUE.
 - **No pawn hash yet** (§17); the pawn terms are computed per evaluation.
 - **OpenBench is self-hosted in WSL** and used for SPSA tuning only; SPRT tests run locally with fastchess (§29).
+- **Pondering shipped before NNUE.** A Phase 3 item, pulled forward for the Lichess bot. fastchess cannot ponder, so its SPRTs ran through a python-chess runner using the same `ponderhit` path as lichess-bot.
 - **`Threads` is accepted but ignored**: search is single-threaded until Lazy SMP lands.
 
 ---
@@ -585,7 +587,7 @@ Incremental accumulator on make/unmake; AVX2 kernels; self-play data generation 
 *Open question before starting:* the trainer. `bullet` is CUDA-first and the GPU here is an AMD RX 6800 XT (see §20). Check `bullet`'s current AMD support, else use native-Linux ROCm + `nnue-pytorch`, a rented NVIDIA GPU, or CPU training for a small first net (768→128/256).
 
 **Phase 3 — Ongoing (optional)**
-Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering (✅ `go ponder` / `ponderhit` + full-PV `info` lines, unreleased), Chess960.
+Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering (✅ *v0.1e*: `go ponder` / `ponderhit` + full-PV `info` lines), Chess960.
 
 ---
 
