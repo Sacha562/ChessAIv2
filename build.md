@@ -1,7 +1,9 @@
 # Build & Toolchain
 
-How ChessAIv2 is compiled. C++20, single self-contained binary, `-march=native` for
-this machine (Ryzen 9 5900X, Zen 3), Clang-primary release builds. Two build paths
+How ChessAIv2 is compiled. C++20, single self-contained binary, Clang-primary.
+Development builds use `-march=native` for this machine (Ryzen 9 5900X, Zen 3);
+published releases use portable ISA-variant builds (see
+[Release builds](#release-builds)). Two build paths
 are kept in sync: **CMake** (primary, for IDEs) and a thin **Makefile** (for
 OpenBench). The rationale behind the toolchain choices lives in
 [PLAN.md](PLAN.md) §0.2–0.4 and §28; day-to-day build/run commands are in
@@ -43,8 +45,8 @@ and the tools via their named targets (`make tuner`, `make extract`).
 slow `pext`), where the library falls back to magic bitboards. See
 [PLAN.md](PLAN.md) §0.4 / §1.
 
-**PGO** (profile-guided optimization, trained on a `bench` run — ~+5–10% NPS) is a
-planned Phase-1 build-script step; not yet wired in.
+**PGO** (profile-guided optimization, trained on a `bench` run — ~+5–10% NPS) is
+planned (PLAN.md Phase 3); not yet wired in.
 
 ## How to Build
 
@@ -85,6 +87,35 @@ unsigned binary — hence WSL2 for actually executing it.
 See [main.cpp.md](src/main.cpp.md) for dispatch and [README.md](README.md) for the
 full command list.
 
+## Release builds
+
+GitHub releases ship **four binaries plus checksums**, built in WSL2 into the
+git-ignored `dist/` directory and named `chessai-<ver>-<os>-<isa>[.exe]`:
+
+| Variant | Flags beyond the base | Runs on |
+|---------|----------------------|---------|
+| `avx2` | — (magic-bitboard sliders) | any AVX2 CPU, incl. AMD Zen 1/2 (slow `pext`) |
+| `bmi2` | `-DCHESS_USE_PEXT` | Intel Haswell+ / AMD Zen 3+ |
+
+The two variants differ **only** in slider move generation, so every build reports the
+same `bench` node count. The base flags use a portable target instead of
+`-march=native` (which would `SIGILL` on other CPUs):
+
+```bash
+V=0.1d
+BASE="-std=c++20 -O3 -march=x86-64-v3 -funroll-loops -flto -DNDEBUG -Iinclude -Isrc"
+clang++                $BASE                  src/*.cpp -pthread         -o dist/chessai-$V-linux-avx2
+clang++                $BASE -DCHESS_USE_PEXT src/*.cpp -pthread         -o dist/chessai-$V-linux-bmi2
+x86_64-w64-mingw32-g++ $BASE                  src/*.cpp -static -pthread -o dist/chessai-$V-windows-avx2.exe
+x86_64-w64-mingw32-g++ $BASE -DCHESS_USE_PEXT src/*.cpp -static -pthread -o dist/chessai-$V-windows-bmi2.exe
+cd dist && sha256sum chessai-$V-* > SHA256SUMS-$V.txt
+printf "bench\nquit\n" | ./chessai-$V-linux-bmi2 | tail -1   # must match the tagged bench
+```
+
+The Windows builds are static (MinGW cross-compiler) so they need no runtime DLLs.
+Publish with `gh release create v<ver> --target <full 40-char sha>` (a short SHA is
+rejected) and attach the five files.
+
 ## Unit tests
 
 Unit tests use **doctest** (single-header, vendored at `include/doctest.h` — third
@@ -107,21 +138,28 @@ node signatures are independent of it. `-Wno-\#warnings` silences a `<ciso646>`
 
 ## Tuning tools
 
-Two offline tools support the Phase 1c HCE eval-tuning loop
-([PLAN.md](PLAN.md) §18). Neither is on the search path, so they may use heap and
+Two offline tools support eval tuning ([PLAN.md](PLAN.md) §18) and will feed NNUE
+data generation in Phase 2. Neither is on the search path, so they may use heap and
 I/O freely; both compile with the same C++20 / `-O3 -march=native` / PEXT flags as
 the engine.
 
 | Tool | Source | Links | Purpose |
 |------|--------|-------|---------|
 | `extract` | [tools/extract.cpp](tools/extract.cpp.md) | header-only (`chess.hpp`) | Replay a PGN and emit quiet, result-labeled positions (`FEN result` per line). |
-| `tuner` | [tools/tune.cpp](tools/tune.cpp.md) | `src/eval.cpp` | Texel-tune the eval's piece-square tables to that dataset; print paste-ready C++ tables. |
+| `tuner` | [tools/tune.cpp](tools/tune.cpp.md) | `src/eval.cpp` | Texel-tune the whole hand-crafted eval (all 1051 `EvalParams` weights: PSQT, mobility, pawn structure, piece terms, king safety, shield/storm) to that dataset; print paste-ready C++. |
 
 ```bash
 make extract && make tuner                       # or CMake: builds both by default
 ./extract games/selfplay.pgn > dataset.txt       # PGN -> labeled FENs
-./tuner dataset.txt --epochs 300 > tuned.txt      # fit tables; new PSQTs on stdout
+./tuner dataset.txt --epochs 300 > tuned.txt      # fit all weights; tuned values on stdout
+./tuner dataset.txt --focus BEGIN END            # tune only params [BEGIN, END), e.g. a new term
 ```
+
+Other flags: `--lr` (Adam step), `--k` (fix the sigmoid scale instead of fitting it),
+`--sample N` (cap the dataset). Before fitting, the tuner checks that its linear model
+reproduces the engine's `evaluate()` on every position and refuses to run if not.
+Lesson from Phase 1c: re-fitting the already-strong PeSTO tables on ~2000-Elo self-play
+**lost** Elo; use the tuner on new, untuned terms (`--focus`) and always SPRT-confirm.
 
 The tuning workflow — generate self-play games (fastchess), `extract` a dataset,
 `tuner` to fit the tables, paste the output into [src/eval.cpp](src/eval.hpp.md), then
@@ -140,7 +178,8 @@ Activate it once per clone (it is a repo config, not committed):
 git config core.hooksPath .githooks
 ```
 
-Because the gate builds and runs the engine, commit from the WSL2 toolchain. Run it
+The gate builds and runs the engine, so it needs the WSL2 toolchain: committing from
+Git Bash on Windows re-runs it inside WSL against the same tree automatically. Run it
 by hand any time with `python3 scripts/run_checks.py`.
 
 ## Code Style & Formatting

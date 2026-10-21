@@ -1,7 +1,7 @@
 # Tool: `tune` (Texel eval tuner)
 
-Offline tuner that fits the evaluation's piece-square tables
-([eval](../src/eval.hpp.md)) to game results using **Texel's tuning method** — the
+Offline tuner that fits the evaluation's weights — all of
+[`EvalParams`](../src/eval.hpp.md) — to game results using **Texel's tuning method** — the
 highest Elo-per-hour step in the Phase 1c HCE work ([PLAN.md](../PLAN.md) §18). It is
 a standalone command-line program (`tuner`), **not** part of the engine: it links
 only `src/eval.cpp` (for `EvalParams` and the seed tables) plus the header-only
