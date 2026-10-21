@@ -2,7 +2,8 @@
 
 One database file holds every ingested game, the per-ply position keys, the
 Stockfish candidates, the analysis queue, the per-ply eval signal, the log of
-moves the book served, per-opponent prep moves, and the dashboard settings. Only the Windows-side server
+moves the book served, per-opponent prep moves, the opponent model, and the
+dashboard settings. Only the Windows-side server
 process opens it, so SQLite locking never crosses the Docker boundary. See
 [db.py.md](db.py.md).
 """
@@ -105,6 +106,19 @@ CREATE TABLE IF NOT EXISTS book_events (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS book_events_game ON book_events(game_id, ply);
+
+CREATE TABLE IF NOT EXISTS opponent_model (
+    opponent   TEXT NOT NULL,
+    key        INTEGER NOT NULL,
+    move       TEXT NOT NULL,
+    expected   REAL NOT NULL,
+    reply      TEXT NOT NULL,
+    reply_prob REAL NOT NULL,
+    source     TEXT NOT NULL,
+    replies    TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (opponent, key, move)
+);
 
 CREATE TABLE IF NOT EXISTS prep_moves (
     opponent   TEXT NOT NULL,

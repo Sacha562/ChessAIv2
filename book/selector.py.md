@@ -60,7 +60,9 @@ One candidate with its evidence and posteriors:
 - **Stored fields:** `move`, `tier`, `source`, `enabled`, `sf_expected`, `sf_cp`, `sf_mate`.
 - **Evidence:** `pooled` and `opponent` ([`MoveStats`](stats.py.md#class-movestats)).
 - **Posteriors:** `pooled_post` and `opponent_post` ([`Posterior`](stats.py.md#class-posterior)).
-- **Flags:** `exhausted`, and `playable` (tier ≤ tier limit).
+- **Model:** `model_expected`, `model_reply`, `model_source`
+  ([opponent_model.py.md](opponent_model.py.md)), or `None` when not modelled.
+- **Flags:** `exhausted`, and `playable`.
 
 ### `class PositionAnalysis`
 
@@ -90,7 +92,19 @@ This opponent's games never enter the pooled layer, so the fallback is "all
 Builds the [`PositionAnalysis`](#class-positionanalysis) for a board, opponent
 and speed: candidates with layered posteriors, the per-opponent tier limit
 ([`unlocked_tier`](stats.py.md#unlocked_tier), computed over enabled candidates
-only), and the exhausted/playable flags. An empty opponent means every game
+only), and the exhausted/playable flags.
+
+**Opponent model.** If the opponent has a [model value](opponent_model.py.md)
+for a candidate here, it is added to that candidate's opponent evidence as
+`k_model` pseudo-games before the posterior is formed. Those pseudo-games also
+count toward exhaustion, so a move the model rates as losing can unlock the
+next tier. A candidate is **playable** if:
+- its tier ≤ the tier limit, or
+- it is modelled at ≥ `model_promote_min` and is not exhausted. This lets a
+  move like 2.f4, tier 2 in general, become playable against an opponent who
+  answers with 2...Ke7.
+
+The `opponent` stats field keeps only real games, for display. An empty opponent means every game
 counts as pooled, which is the dashboard's pooled view.
 
 ### `replay_move`

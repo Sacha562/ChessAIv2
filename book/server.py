@@ -281,6 +281,14 @@ def create_app(static: config.StaticConfig, start_worker: bool = True) -> FastAP
         worker.wake()
         return {"ok": True}
 
+    @app.post("/api/opponents/{opponent}/deepen")
+    def deepen_opponent(opponent: str) -> dict:
+        with db.session(static.db_path) as conn:
+            db.enqueue(conn, "deepen", opponent.lower(), ingest.PRIORITY_DEEPEN, force=True)
+            conn.commit()
+        worker.wake()
+        return {"ok": True}
+
     @app.get("/api/prep")
     def get_prep(opponent: str = "") -> list[dict]:
         with db.session(static.db_path) as conn:

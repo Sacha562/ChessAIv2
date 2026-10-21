@@ -27,9 +27,10 @@ worker writes.
 | `game_moves` | (`game_id`, `ply`) | Position key **before** each ply, the move played, and `by_us`. Indexed on (`key`, `by_us`); this is the evidence table behind every statistic. |
 | `positions` | `key` | FEN, Stockfish `best_expected`, `analysed_depth`, `analysed_multipv`, `analysed_at` (NULL = never analysed), `widened` (0/1). |
 | `candidates` | (`key`, `move`) | Playable book moves: `tier` (99 = outside every tier), `source` (`engine` = MultiPV, `ours` = a move we played, evaluated with searchmoves, `manual` = added on the dashboard), Stockfish `sf_cp` / `sf_mate` / `sf_expected` / `sf_depth`, `enabled`, `added_at`. |
-| `analysis_queue` | `id`; unique (`kind`, `target`) | Jobs: `kind` ∈ `candidates`, `widen` (target = position key as text), `signal` (target = game id); `fen`, `priority` (lower runs first), `status` ∈ `queued`/`running`/`done`/`failed`, `error`, timestamps. |
+| `analysis_queue` | `id`; unique (`kind`, `target`) | Jobs: `kind` ∈ `candidates`, `widen` (target = position key as text), `signal` (target = game id), `deepen` (target = opponent id); `fen`, `priority` (lower runs first), `status` ∈ `queued`/`running`/`done`/`failed`, `error`, timestamps. |
 | `signal_evals` | (`game_id`, `ply`) | Stockfish expected score for us at that ply ([scoring.py.md](scoring.py.md)). |
 | `book_events` | `id` | Every live decision the book took: `game_id`, `ply`, `key`, `move` (NULL on a miss), `source` ∈ `prep`/`book`/`replay`/`miss`, `opponent`, `speed`, `created_at`. |
+| `opponent_model` | (`opponent`, `key`, `move`) | Model value of our move vs an opponent's predicted reply: `expected`, `reply`, `reply_prob`, `source`, `replies` signature, `updated_at` ([opponent_model.py.md](opponent_model.py.md)). |
 | `prep_moves` | (`opponent`, `key`) | Per-opponent prepared moves: UCI path `moves`, prepared `move`, `note`, `created_at` ([prep.py.md](prep.py.md)). |
 | `settings` | `name` | JSON-encoded overrides of [`DEFAULT_SETTINGS`](config.py.md#default_settings). |
 | `meta` | `name` | `last_created_at` (ingest cursor, lichess ms) and `last_ingest_at` (s). |

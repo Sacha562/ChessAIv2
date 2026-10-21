@@ -15,7 +15,7 @@ It renders into `main#view` of [index.html](index.html.md) and is styled by
 |------|------|-----------|--------------|
 | `#/overview` (default) | `renderOverview` | `GET /api/overview`, `POST /api/ingest` | Stat tiles (games, opponents, score, analysed positions, candidates, manual candidates); per-speed table with a link to the pooled book; worker state, last ingest, per-kind queue counts, "Ingest now"; recent book decisions linked to lichess. Refreshes every 5 s. |
 | `#/opponents` | `renderOpponents` | `GET /api/opponents` | Filterable table: games, score, per-speed chips, determinism %, wins (replayable), last played. |
-| `#/opponent/<id>` | `renderOpponent` | `GET /api/opponents/<id>`, `DELETE /api/prep` | Per speed/color W/D/L, mean signal and book exit; the opponent's prep lines (open in the explorer, remove); most played 6-ply lines (open in the explorer); recent games with signal and exit ply. |
+| `#/opponent/<id>` | `renderOpponent` | `GET /api/opponents/<id>`, `POST /api/opponents/<id>/deepen`, `DELETE /api/prep` | Per speed/color W/D/L, mean signal and book exit; the opponent model panel (predicted habits per move number, modelled-move count, **Deepen now**); the opponent's prep lines (open in the explorer, remove); most played 6-ply lines (open in the explorer); recent games with signal and exit ply. |
 | `#/explore?moves=&opp=&speed=` | `renderExplore` | `GET /api/settings`, `GET /api/position`, `GET /api/opponents` (name suggestions) | Board + candidates for one position, opponent and speed. See below. |
 | `#/queue` | `renderQueue` | `GET /api/queue` | Running/queued jobs, then recent finished ones with errors. Refreshes every 5 s. |
 | `#/settings` | `renderSettings` | `GET /api/settings`, `GET /api/calibration`, `PUT /api/settings` | Editable table of every setting (checkbox for booleans; JSON for `tier_gaps`) with defaults; the eval-window calibration bar chart. |
@@ -31,6 +31,8 @@ It renders into `main#view` of [index.html](index.html.md) and is styled by
   - **Identity:** move, tier, source.
   - **Stockfish:** score and expected score.
   - **Evidence:** pooled n and mean, opponent n and mean.
+  - **Model:** expected score against this opponent's predicted reply, which is
+    shown next to it (hover for its source).
   - **Verdict:** opponent posterior (the hover shows the Beta parameters), Thompson
     pick probability, and status (`playable` / `locked tier` / `exhausted` / `disabled`).
 

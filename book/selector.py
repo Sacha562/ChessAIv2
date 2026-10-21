@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import chess
 
-from . import db, ingest, prep, scoring, stats
+from . import db, ingest, opponent_model, prep, scoring, stats
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,9 @@ class CandidateView:
     opponent: stats.MoveStats
     pooled_post: stats.Posterior
     opponent_post: stats.Posterior
+    model_expected: float | None = None
+    model_reply: str | None = None
+    model_source: str | None = None
     exhausted: bool = False
     playable: bool = False
 
@@ -108,10 +111,19 @@ def _evidence(conn: sqlite3.Connection, key: int, opponent: str, speed: str,
 
 def analyse_position(conn: sqlite3.Connection, board: chess.Board, opponent: str, speed: str,
                      settings: dict) -> PositionAnalysis:
-    """Candidates of ``board`` with evidence, posteriors and the tier verdict."""
+    """Candidates of ``board`` with evidence, posteriors and the tier verdict.
+
+    The opponent-model value of a move (if any) is added to this opponent's
+    evidence as ``k_model`` pseudo-games before the posterior is formed, so the
+    model moves the weights but real results keep correcting it. A move the
+    model rates at least ``model_promote_min`` is playable even above the
+    unlocked tier.
+    """
     key = db.position_key(board)
     pooled, mine = _evidence(conn, key, opponent, speed, settings)
+    model = opponent_model.model_values(conn, opponent, key) if opponent else {}
     k_sf, k_pool = float(settings["k_stockfish"]), float(settings["k_pool"])
+    k_model = float(settings["k_model"])
     views: list[CandidateView] = []
     for row in conn.execute("SELECT * FROM candidates WHERE key = ? ORDER BY tier, sf_expected DESC",
                             (key,)):
@@ -119,22 +131,35 @@ def analyse_position(conn: sqlite3.Connection, board: chess.Board, opponent: str
             continue
         p_stats = pooled.get(row["move"], stats.MoveStats())
         o_stats = mine.get(row["move"], stats.MoveStats())
+        modelled = model.get(row["move"])
+        evidence = stats.MoveStats(o_stats.n, o_stats.total)
+        if modelled is not None:
+            evidence.add(modelled["expected"], k_model)
         pooled_post, opponent_post = stats.layered_posterior(row["sf_expected"], p_stats,
-                                                             o_stats, k_sf, k_pool)
+                                                             evidence, k_sf, k_pool)
         views.append(CandidateView(
             move=row["move"], tier=row["tier"], source=row["source"], enabled=bool(row["enabled"]),
             sf_expected=row["sf_expected"], sf_cp=row["sf_cp"], sf_mate=row["sf_mate"],
             pooled=p_stats, opponent=o_stats, pooled_post=pooled_post,
-            opponent_post=opponent_post))
+            opponent_post=opponent_post,
+            model_expected=modelled["expected"] if modelled is not None else None,
+            model_reply=modelled["reply"] if modelled is not None else None,
+            model_source=modelled["source"] if modelled is not None else None))
     threshold = float(settings["exhaust_threshold"])
     min_games = float(settings["exhaust_min_games"])
+    promote_min = float(settings["model_promote_min"])
     enabled = [v for v in views if v.enabled]
-    tier_inputs = [stats.TierInput(v.tier, v.opponent.n, v.opponent_post.mean) for v in enabled]
-    tier_limit, all_exhausted = stats.unlocked_tier(tier_inputs, threshold, min_games)
+
+    def tier_input(view: CandidateView) -> stats.TierInput:
+        model_n = k_model if view.model_expected is not None else 0.0
+        return stats.TierInput(view.tier, view.opponent.n + model_n, view.opponent_post.mean)
+
+    tier_limit, all_exhausted = stats.unlocked_tier([tier_input(v) for v in enabled],
+                                                    threshold, min_games)
     for view in enabled:
-        view.exhausted = stats.is_exhausted(
-            stats.TierInput(view.tier, view.opponent.n, view.opponent_post.mean), threshold, min_games)
-        view.playable = view.tier <= tier_limit
+        view.exhausted = stats.is_exhausted(tier_input(view), threshold, min_games)
+        promoted = view.model_expected is not None and view.model_expected >= promote_min
+        view.playable = view.tier <= tier_limit or (promoted and not view.exhausted)
     position = conn.execute("SELECT widened FROM positions WHERE key = ?", (key,)).fetchone()
     return PositionAnalysis(key=key, candidates=views, tier_limit=tier_limit,
                             all_exhausted=all_exhausted,

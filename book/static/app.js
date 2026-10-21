@@ -175,6 +175,16 @@ async function renderOpponent(name) {
         <td class="num ${scoreClass(s.signal)}">${pct(s.signal)}</td><td class="num">${num(s.avg_exit_ply)}</td>
         <td><a href="${exploreLink([], d.opponent, s.speed)}">explore →</a></td></tr>`).join("")}
     </table></div>
+    <h2>Opponent model</h2>
+    <div class="panel">
+      <div class="row">
+        <span>Predicted habits (recent games): ${d.patterns.length ? d.patterns.map((p) => `<span class="chip">we ${esc(p.our_color)}, move ${p.move_number}: ${esc(p.move)}</span>`).join("") : '<span class="muted">none</span>'}</span>
+      </div>
+      <div class="row">
+        <span class="muted">${d.model_rows} modelled moves · updated ${when(d.model_updated_at)}</span>
+        <button id="deepen">Deepen now</button>
+      </div>
+    </div>
     <h2>Prep (forced moves vs this opponent, all speeds)</h2>
     <div class="panel"><table id="prep-table">
       <tr><th>Line (prepared move last)</th><th>Note</th><th></th></tr>
@@ -203,6 +213,14 @@ async function renderOpponent(name) {
         <td class="num ${scoreClass(g.signal)}">${pct(g.signal)}</td>
         <td class="num" title="${esc(g.exit_source)}">${g.exit_ply}</td><td>${esc(g.opening)}</td></tr>`).join("")}
     </table></div>`;
+  document.getElementById("deepen").onclick = async () => {
+    try {
+      await api(`/api/opponents/${encodeURIComponent(d.opponent)}/deepen`, { method: "POST" });
+      toast("Deepen queued");
+    } catch (error) {
+      toast(`Error: ${error.message}`);
+    }
+  };
   document.getElementById("prep-table").onclick = async (event) => {
     const btn = event.target.closest("button[data-moves]");
     if (!btn) return;
@@ -266,7 +284,7 @@ function moveListHtml(pos, opponent, speed) {
 
 function candidateRows(pos, opponent, speed) {
   if (!pos.candidates.length) {
-    return `<tr><td colspan="13" class="muted">No candidates yet${pos.jobs.length ? ` — job ${esc(pos.jobs[0].kind)} ${esc(pos.jobs[0].status)}` : ""}.</td></tr>`;
+    return `<tr><td colspan="14" class="muted">No candidates yet${pos.jobs.length ? ` — job ${esc(pos.jobs[0].kind)} ${esc(pos.jobs[0].status)}` : ""}.</td></tr>`;
   }
   return pos.candidates.map((c) => {
     const status = !c.enabled ? '<span class="muted">disabled</span>'
@@ -279,6 +297,7 @@ function candidateRows(pos, opponent, speed) {
       <td class="num">${sfText(c)}</td><td class="num">${pct(c.sf_expected)}</td>
       <td class="num">${num(c.pooled_n, 1)}</td><td class="num ${scoreClass(c.pooled_mean)}">${pct(c.pooled_mean)}</td>
       <td class="num">${num(c.opp_n, 1)}</td><td class="num ${scoreClass(c.opp_mean)}">${pct(c.opp_mean)}</td>
+      <td class="num ${scoreClass(c.model_expected)}" title="${c.model_reply ? `predicted reply ${esc(c.model_reply)} (${esc(c.model_source)})` : "no prediction"}">${c.model_expected == null ? "—" : `${pct(c.model_expected)} <span class="muted">vs ${esc(c.model_reply)}</span>`}</td>
       <td class="num ${scoreClass(c.opp_post)}" title="Beta(${num(c.alpha, 2)}, ${num(c.beta, 2)})">${pct(c.opp_post)}</td>
       <td class="num">${c.playable && c.enabled ? pct(c.pick) : "—"}</td><td>${status}</td>
       <td>
@@ -362,7 +381,7 @@ async function renderExplore(params) {
         <div class="panel"><table id="cand-table">
           <tr><th>Move</th><th class="num">Tier</th><th>Source</th><th class="num">SF</th><th class="num">SF exp.</th>
           <th class="num">Pool n</th><th class="num">Pool</th><th class="num">Opp n</th><th class="num">Opp</th>
-          <th class="num">Posterior</th><th class="num">Pick</th><th>Status</th><th></th></tr>
+          <th class="num">Model</th><th class="num">Posterior</th><th class="num">Pick</th><th>Status</th><th></th></tr>
           ${candidateRows(pos, opponent, speed)}
         </table></div>
         <h2>Moves played here</h2>

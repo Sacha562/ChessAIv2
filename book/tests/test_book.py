@@ -12,7 +12,7 @@ from pathlib import Path
 
 import chess
 
-from book import config, db, ingest, prep, scoring, selector, stats
+from book import config, db, ingest, opponent_model, prep, scoring, selector, stats
 
 ACCOUNT = "SmikkelBot"
 
@@ -52,7 +52,7 @@ class DbTestCase(unittest.TestCase):
     def add_candidate(self, moves: tuple[str, ...], move: str, tier: int, expected: float) -> None:
         board = selector.board_from_moves(moves)
         self.conn.execute(
-            "INSERT INTO candidates(key, move, tier, source, sf_expected, enabled, added_at) "
+            "INSERT OR REPLACE INTO candidates(key, move, tier, source, sf_expected, enabled, added_at) "
             "VALUES(?, ?, ?, 'engine', ?, 1, 0)", (db.position_key(board), move, tier, expected))
         self.conn.execute("INSERT OR REPLACE INTO positions(key, fen, analysed_at) VALUES(?, ?, 1)",
                           (db.position_key(board), board.fen()))
@@ -271,6 +271,100 @@ class PrepTests(DbTestCase):
         self.store(raw_game("a", "e4 e5 Nf3 Nc6", True, "white"))
         row = self.conn.execute("SELECT exit_ply, exit_source FROM games").fetchone()
         self.assertEqual((row["exit_ply"], row["exit_source"]), (2, "served"))
+
+
+class FakeStockfish:
+    """Scores a position by a lookup on its FEN board part; 0.5 otherwise."""
+
+    def __init__(self, scores: dict[str, float]) -> None:
+        self.scores = scores
+        self.calls = 0
+
+    def position_expected(self, board: chess.Board, nodes: int, pov: chess.Color) -> float:
+        self.calls += 1
+        return self.scores.get(board.board_fen(), 0.5)
+
+
+def bongcloud_history(case: "DbTestCase", games: int = 4) -> None:
+    """Opponent 'bong' plays 1...e5 2...Ke7 as Black and 1.e4 2.Ke2 as White."""
+    for i in range(games):
+        second = ("Nf3", "Nc3", "Bc4", "d3")[i % 4]
+        case.store(raw_game(f"w{i}", f"e4 e5 {second} Ke7", True, "white", "bong", created_at=i + 1))
+        reply = ("e5", "c5", "e6", "d5")[i % 4]
+        case.store(raw_game(f"b{i}", f"e4 {reply} Ke2", False, "white", "bong", created_at=i + 1))
+
+
+class OpponentModelTests(DbTestCase):
+    def test_ply_patterns_found(self) -> None:
+        bongcloud_history(self)
+        patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
+        self.assertEqual(patterns[("white", 1)], "e7e5")
+        self.assertEqual(patterns[("white", 3)], "e8e7")
+        self.assertEqual(patterns[("black", 0)], "e2e4")
+        self.assertEqual(patterns[("black", 2)], "e1e2")
+
+    def test_inconsistent_ply_is_not_a_pattern(self) -> None:
+        bongcloud_history(self)
+        patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
+        self.assertNotIn(("white", 2), patterns)  # that ply is ours, never theirs
+        self.assertNotIn(("black", 1), patterns)
+
+    def test_history_beats_pattern(self) -> None:
+        bongcloud_history(self)
+        self.store(raw_game("x", "e4 e5 f4 Nc6", True, "white", "bong", created_at=99))
+        board = selector.board_from_moves(("e2e4", "e7e5", "f2f4"))
+        patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
+        replies = opponent_model.predict_replies(self.conn, "bong", board, chess.WHITE, patterns)
+        self.assertEqual((replies[0].move, replies[0].source), ("b8c6", "history"))
+        fresh = selector.board_from_moves(("e2e4", "e7e5", "d2d4"))
+        replies = opponent_model.predict_replies(self.conn, "bong", fresh, chess.WHITE, patterns)
+        self.assertEqual((replies[0].move, replies[0].source), ("e8e7", "pattern"))
+
+    def test_deepen_scores_moves_against_predicted_reply(self) -> None:
+        bongcloud_history(self)
+        after_f4 = selector.board_from_moves(("e2e4", "e7e5", "f2f4", "e8e7")).board_fen()
+        after_nf3 = selector.board_from_moves(("e2e4", "e7e5", "g1f3", "e8e7")).board_fen()
+        stockfish = FakeStockfish({after_f4: 0.95, after_nf3: 0.80})
+
+        def ensure(board: chess.Board) -> None:
+            moves = tuple(m.uci() for m in board.move_stack)
+            if moves == ("e2e4", "e7e5"):
+                self.add_candidate(moves, "g1f3", 0, 0.55)
+                self.add_candidate(moves, "f2f4", 2, 0.45)
+            elif not moves:
+                self.add_candidate(moves, "e2e4", 0, 0.55)
+
+        self.settings["max_book_ply"] = 4
+        opponent_model.deepen(self.conn, stockfish, "bong", self.settings, ensure)
+        board = selector.board_from_moves(("e2e4", "e7e5"))
+        values = opponent_model.model_values(self.conn, "bong", db.position_key(board))
+        self.assertAlmostEqual(values["f2f4"]["expected"], 0.95)
+        self.assertEqual(values["f2f4"]["reply"], "e8e7")
+        calls = stockfish.calls
+        opponent_model.deepen(self.conn, stockfish, "bong", self.settings, ensure)
+        self.assertEqual(stockfish.calls, calls)  # unchanged predictions are cached
+
+    def test_model_reweights_and_promotes_for_that_opponent_only(self) -> None:
+        bongcloud_history(self)
+        moves = ("e2e4", "e7e5")
+        self.add_candidate(moves, "g1f3", 0, 0.55)
+        self.add_candidate(moves, "f2f4", 2, 0.45)
+        key = db.position_key(selector.board_from_moves(moves))
+        self.conn.execute("INSERT INTO opponent_model VALUES('bong', ?, 'f2f4', 0.95, 'e8e7', 1.0, "
+                          "'pattern', 'e8e7:1.000', 0)", (key,))
+        board = selector.board_from_moves(moves)
+        vs_bong = {v.move: v for v in selector.analyse_position(self.conn, board, "bong", "blitz",
+                                                                self.settings).candidates}
+        self.assertTrue(vs_bong["f2f4"].playable)
+        self.assertGreater(vs_bong["f2f4"].opponent_post.mean, vs_bong["g1f3"].opponent_post.mean)
+        vs_other = {v.move: v for v in selector.analyse_position(self.conn, board, "other", "blitz",
+                                                                 self.settings).candidates}
+        self.assertFalse(vs_other["f2f4"].playable)
+
+    def test_predictable_opponent_auto_queues_deepen(self) -> None:
+        bongcloud_history(self, games=5)
+        jobs = self.conn.execute("SELECT target FROM analysis_queue WHERE kind = 'deepen'").fetchall()
+        self.assertEqual([j["target"] for j in jobs], ["bong"])
 
 
 class ServerTests(DbTestCase):

@@ -19,7 +19,6 @@ signed 64-bit integer exactly. Served by [server.py](server.py.md#dashboard-endp
 |----------|-------|---------|
 | `RECENT_EVENTS` | `30` | Book decisions on the overview. |
 | `RECENT_GAMES` | `50` | Games listed per opponent. |
-| `DETERMINISM_MAX_PLY` | `40` | Determinism is measured on opponent moves before ply 40. |
 | `LINE_PLIES` | `6` | Plies that define a "line" on the opponent page. |
 | `QUEUE_LIMIT` | `200` | Jobs listed on the queue page. |
 
@@ -37,13 +36,7 @@ signed 64-bit integer exactly. Served by [server.py](server.py.md#dashboard-endp
 
 The server adds the worker snapshot.
 
-### `_determinism`
-
-Over positions where the opponent moved at least twice (before ply 40), the
-share where they always chose the same move. Near 100 % means a deterministic
-bot, whose won games are worth replaying.
-
-**Returns:** `(share | None, number of repeated positions)`.
+Determinism figures come from [`opponent_model.determinism`](opponent_model.py.md#determinism).
 
 ### `opponents`
 
@@ -66,6 +59,18 @@ For one opponent, returns a dict with:
   result, status, exit ply and source, signal, and opening SAN (first 10 plies).
 - **`determinism`** and **`repeated_positions`**.
 - **`prep`:** this opponent's [prep entries](prep.py.md#list_prep).
+- **`patterns`:** [`_patterns`](#_patterns).
+- **`model_rows`** and **`model_updated_at`:** size and freshness of this
+  opponent's [model](opponent_model.py.md).
+
+### `_patterns`
+
+The opponent's [ply patterns](opponent_model.py.md#ply_patterns) as rows of
+`our_color`, `ply`, `move_number` and `move` (UCI).
+
+### `_san_after`
+
+SAN of a predicted reply after our candidate move, or `None`.
 
 ### `_played_here`
 
@@ -88,6 +93,9 @@ The explorer's view of the position after `moves`, built for `opponent` and
   for this key).
 - **`played`:** from [`_played_here`](#_played_here).
 - **`prep`:** the prepared UCI move for this opponent here, or null (always null in the pooled view).
+- **Model fields, per candidate:** `model_expected`, `model_source`, and
+  `model_reply` (SAN of the predicted reply via [`_san_after`](#_san_after)).
+  All null when the move is not modelled.
 
 **Warnings:** raises `ValueError` on illegal moves. The server validates them
 first and answers 400.

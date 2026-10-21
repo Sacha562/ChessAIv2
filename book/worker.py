@@ -20,7 +20,7 @@ import urllib.error
 import chess
 import chess.engine
 
-from . import config, db, ingest, lichess_api, scoring
+from . import config, db, ingest, lichess_api, opponent_model, scoring
 from .engine import LineEval, Stockfish
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,9 @@ def run_job(conn: sqlite3.Connection, stockfish: Stockfish, job: sqlite3.Row, se
     if job["kind"] == "signal":
         run_signal(conn, stockfish, job["target"], settings)
         return
+    if job["kind"] == "deepen":
+        run_deepen(conn, stockfish, job["target"], settings)
+        return
     if job["kind"] in ("candidates", "widen"):
         run_candidates(conn, stockfish, int(job["target"]), job["fen"], settings,
                        widen=job["kind"] == "widen")
@@ -323,3 +326,15 @@ def run_signal(conn: sqlite3.Connection, stockfish: Stockfish, game_id: str, set
             todo.discard(ply)
         board.push_uci(uci)
     conn.commit()
+
+
+def run_deepen(conn: sqlite3.Connection, stockfish: Stockfish, opponent: str, settings: dict) -> None:
+    """Refresh the opponent model of ``opponent`` along its predicted lines,
+    generating candidates for any new position on the way."""
+    def ensure_candidates(board: chess.Board) -> None:
+        key = db.position_key(board)
+        row = conn.execute("SELECT analysed_at FROM positions WHERE key = ?", (key,)).fetchone()
+        if row is None or row["analysed_at"] is None:
+            run_candidates(conn, stockfish, key, board.fen(), settings, widen=False)
+
+    opponent_model.deepen(conn, stockfish, opponent, settings, ensure_candidates)

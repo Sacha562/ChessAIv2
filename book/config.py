@@ -38,6 +38,18 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "exhaust_threshold": 0.40,
     "exhaust_min_games": 3,
     "tier_gaps": [0.03, 0.07, 0.12, 0.18],
+    # Opponent model (predicted replies -> per-opponent weights)
+    "k_model": 8.0,
+    "model_recent_games": 20,
+    "model_pattern_min_games": 3,
+    "model_pattern_share": 0.8,
+    "model_pattern_max_ply": 12,
+    "model_nodes": 2_000_000,
+    "model_branch": 2,
+    "model_max_positions": 40,
+    "model_promote_min": 0.6,
+    "model_auto_determinism": 0.7,
+    "model_auto_min_games": 10,
     # Candidate analysis
     "candidate_always_ply": 8,
     "candidate_min_visits": 2,

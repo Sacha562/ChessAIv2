@@ -8,6 +8,7 @@ daemon threads.
   Jobs:
   - `candidates`: generate or refresh a position's book moves
   - `widen`: the same, deeper and wider
+  - `deepen`: refresh one opponent's [model](opponent_model.py.md), target = opponent id
   - `signal`: evaluate a game's post-book plies
 
   It **throttles while a lichess game is live**: the shim announces start and
@@ -103,8 +104,10 @@ server start.
 
 ### `run_job`
 
-Dispatches a claimed row to [`run_signal`](#run_signal) or
-[`run_candidates`](#run_candidates) (`widen=True` for `widen` jobs).
+Dispatches a claimed row:
+- `signal` → [`run_signal`](#run_signal)
+- `deepen` → [`run_deepen`](#run_deepen)
+- `candidates` / `widen` → [`run_candidates`](#run_candidates) (`widen=True` for `widen` jobs)
 
 **Warnings:** raises `ValueError` on an unknown kind.
 
@@ -137,6 +140,13 @@ Generates or refreshes the candidates of one position:
   dashboard, which makes it manual.
 - Changing `tier_gaps` does not re-tier existing candidates until each position
   is re-analysed ("Analyse now").
+
+### `run_deepen`
+
+Runs [`opponent_model.deepen`](opponent_model.py.md#deepen) for one opponent.
+Its `ensure_candidates` callback runs [`run_candidates`](#run_candidates) (normal
+mode) on any position along the predicted lines that was never analysed, so
+deepening also grows the candidate set where the opponent is heading.
 
 ### `run_signal`
 

@@ -11,11 +11,10 @@ import sqlite3
 
 import chess
 
-from . import db, prep, scoring, selector, stats
+from . import db, opponent_model, prep, scoring, selector, stats
 
 RECENT_EVENTS = 30
 RECENT_GAMES = 50
-DETERMINISM_MAX_PLY = 40
 LINE_PLIES = 6
 QUEUE_LIMIT = 200
 
@@ -46,19 +45,6 @@ def overview(conn: sqlite3.Connection) -> dict:
             "events": events, "last_ingest_at": db.get_meta(conn, "last_ingest_at")}
 
 
-def _determinism(conn: sqlite3.Connection, opponent: str) -> tuple[float | None, int]:
-    """Share of repeated positions where ``opponent`` always chose the same move."""
-    rows = conn.execute(
-        "SELECT COUNT(DISTINCT gm.move) AS distinct_moves FROM game_moves gm "
-        "JOIN games g ON g.id = gm.game_id WHERE g.opponent = ? AND gm.by_us = 0 "
-        "AND gm.ply < ? GROUP BY gm.key HAVING COUNT(*) >= 2",
-        (opponent, DETERMINISM_MAX_PLY)).fetchall()
-    if not rows:
-        return None, 0
-    same = sum(1 for r in rows if r["distinct_moves"] == 1)
-    return same / len(rows), len(rows)
-
-
 def opponents(conn: sqlite3.Connection) -> list[dict]:
     """One row per opponent: games, score per speed, determinism, replayable wins."""
     result = []
@@ -69,7 +55,7 @@ def opponents(conn: sqlite3.Connection) -> list[dict]:
         speeds = [dict(r) for r in conn.execute(
             "SELECT speed, COUNT(*) AS games, AVG(result) AS score FROM games "
             "WHERE opponent = ? GROUP BY speed ORDER BY games DESC", (row["opponent"],))]
-        determinism, repeated = _determinism(conn, row["opponent"])
+        determinism, repeated = opponent_model.determinism(conn, row["opponent"])
         result.append({**dict(row), "speeds": speeds, "determinism": determinism,
                        "repeated_positions": repeated})
     return result
@@ -106,12 +92,17 @@ def opponent_detail(conn: sqlite3.Connection, opponent: str, settings: dict) -> 
         "avg_exit_ply": _score([float(r["exit_ply"]) for r in group]),
     } for (speed, color), group in sorted(groups.items())]
     top_lines = sorted(lines.items(), key=lambda item: len(item[1]), reverse=True)[:20]
-    determinism, repeated = _determinism(conn, opponent)
+    determinism, repeated = opponent_model.determinism(conn, opponent)
     return {
         "opponent": opponent,
         "name": rows[0]["opponent_name"] if rows else opponent,
         "determinism": determinism, "repeated_positions": repeated, "summary": summary,
         "prep": prep.list_prep(conn, opponent),
+        "patterns": _patterns(conn, opponent, settings),
+        "model_rows": conn.execute("SELECT COUNT(*) FROM opponent_model WHERE opponent = ?",
+                                   (opponent,)).fetchone()[0],
+        "model_updated_at": conn.execute("SELECT MAX(updated_at) FROM opponent_model "
+                                         "WHERE opponent = ?", (opponent,)).fetchone()[0],
         "lines": [{"speed": s, "color": c, "moves": line.split(),
                    "san": _opening_san(line, LINE_PLIES), "games": len(group),
                    "score": _score([r["result"] for r in group]),
@@ -123,6 +114,24 @@ def opponent_detail(conn: sqlite3.Connection, opponent: str, settings: dict) -> 
                    "signal": signals[r["id"]], "opening": _opening_san(r["moves"], 10)}
                   for r in rows[:RECENT_GAMES]],
     }
+
+
+def _patterns(conn: sqlite3.Connection, opponent: str, settings: dict) -> list[dict]:
+    """The opponent's ply patterns as ``{our_color, ply, move_number, move}`` rows."""
+    rows = []
+    for (color, ply), move in sorted(opponent_model.ply_patterns(conn, opponent, settings).items()):
+        rows.append({"our_color": color, "ply": ply, "move_number": ply // 2 + 1, "move": move})
+    return rows
+
+
+def _san_after(board: chess.Board, move: str, reply: str | None) -> str | None:
+    """SAN of the predicted ``reply`` after our ``move``, or None."""
+    if reply is None:
+        return None
+    after = board.copy()
+    after.push(chess.Move.from_uci(move))
+    parsed = chess.Move.from_uci(reply)
+    return after.san(parsed) if parsed in after.legal_moves else reply
 
 
 def _played_here(conn: sqlite3.Connection, key: int, opponent: str, speed: str,
@@ -174,7 +183,9 @@ def position(conn: sqlite3.Connection, moves: tuple[str, ...], opponent: str, sp
             "opp_mean": view.opponent.mean, "opp_post": view.opponent_post.mean,
             "alpha": view.opponent_post.alpha, "beta": view.opponent_post.beta,
             "exhausted": view.exhausted, "playable": view.playable,
-            "pick": picks.get(view.move, 0.0)})
+            "pick": picks.get(view.move, 0.0),
+            "model_expected": view.model_expected, "model_source": view.model_source,
+            "model_reply": _san_after(board, view.move, view.model_reply)})
     legal = sorted(({"move": m.uci(), "san": board.san(m)} for m in board.legal_moves),
                    key=lambda m: m["san"])
     return {

@@ -29,6 +29,7 @@ It is called by the worker's scheduler ([worker.py.md](worker.py.md)) every
 | `SPEED_ORDER` | `ultraBullet … correspondence` | lichess speed buckets, fastest first (dashboard speed list). |
 | `PRIORITY_MISS` | `0` | Live book miss: analyse first, since the position is being played. |
 | `PRIORITY_MANUAL` | `1` | Dashboard "Analyse now" and new manual candidates. |
+| `PRIORITY_DEEPEN` | `3` | Opponent-model deepen run ([opponent_model.py.md](opponent_model.py.md#deepen)). |
 | `PRIORITY_WIDEN` | `5` | All tiers exhausted against an opponent. |
 | `PRIORITY_CANDIDATE_BASE` | `10` | History position at ply *p* gets `10 + p`, so shallow positions go first. |
 | `PRIORITY_SIGNAL` | `60` | Per-game eval signal; runs after candidate work. |
@@ -79,10 +80,22 @@ The eval-signal window is measured from this ply ([scoring.py.md](scoring.py.md)
 
 Inserts or replaces one game. Deletes and re-inserts its `game_moves`, queues
 candidate analysis for each of our positions before `max_book_ply` that passes
-[`worth_analysing`](#worth_analysing), and queues the game's `signal` job.
+[`worth_analysing`](#worth_analysing), queues the game's `signal` job, and for
+predictable opponents a model `deepen` job
+([`queue_deepen_if_predictable`](#queue_deepen_if_predictable)).
 
 **Side Effects:** writes `games`, `game_moves`, `positions`, `analysis_queue`;
 the caller commits.
+
+### `queue_deepen_if_predictable`
+
+Called at the end of [`store_game`](#store_game). For an opponent with at least
+`model_auto_min_games` games and a [determinism](opponent_model.py.md#determinism)
+of at least `model_auto_determinism`, it force-queues a `deepen` job (target =
+opponent id) at priority 3. Running after every game is cheap, because
+unchanged predictions reuse their stored values.
+
+**Returns:** `True` if a job was queued. The caller commits.
 
 ### `worth_analysing`
 

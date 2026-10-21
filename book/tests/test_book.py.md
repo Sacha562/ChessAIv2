@@ -22,6 +22,7 @@ No network and no Stockfish are needed.
 - [../selector.py.md](../selector.py.md)
 - [../server.py.md](../server.py.md)
 - [../prep.py.md](../prep.py.md)
+- [../opponent_model.py.md](../opponent_model.py.md)
 - [../db.py.md](../db.py.md), [../config.py.md](../config.py.md)
 
 ## How to Build & Run
@@ -82,6 +83,18 @@ book/.venv/Scripts/python -m unittest book.tests.test_book
 - `test_prep_line_sets_only_our_moves`: a Black line prepares only Black's moves; SAN rendering (`1.e4 d5 2.Ke2 dxe4`); removal.
 - `test_illegal_prep_rejected`: an illegal move raises `ValueError`.
 - `test_prep_counts_as_served_for_exit`: a `prep` event moves the book exit like a `book` event.
+
+### `OpponentModelTests`
+
+Uses `bongcloud_history` (an opponent playing 1...e5 2...Ke7 and 1.e4 2.Ke2)
+and `FakeStockfish` (scores looked up by board FEN).
+
+- `test_ply_patterns_found`: the four Bongcloud plies are detected as patterns.
+- `test_inconsistent_ply_is_not_a_pattern`: plies they never play, or play inconsistently, are not patterns.
+- `test_history_beats_pattern`: an actually-seen reply in this exact position beats the ply pattern; a new position falls back to the pattern.
+- `test_deepen_scores_moves_against_predicted_reply`: `deepen` scores 2.f4 by the position after the predicted 2...Ke7; a second run with unchanged predictions makes no Stockfish calls.
+- `test_model_reweights_and_promotes_for_that_opponent_only`: a modelled tier-2 move becomes playable and outranks the tier-0 move against that opponent, but stays locked for others.
+- `test_predictable_opponent_auto_queues_deepen`: storing games of a predictable opponent queues one `deepen` job.
 
 ### `ServerTests`
 

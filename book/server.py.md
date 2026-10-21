@@ -63,6 +63,7 @@ key, because the browser cannot hold 64-bit keys.
 | GET | `/api/overview` | [`reports.overview`](reports.py.md#overview) + `worker`. |
 | GET | `/api/opponents` | [`reports.opponents`](reports.py.md#opponents). |
 | GET | `/api/opponents/{opponent}` | [`reports.opponent_detail`](reports.py.md#opponent_detail). |
+| POST | `/api/opponents/{opponent}/deepen` | Force-queues a model `deepen` job for the opponent (priority 3) ([opponent_model.py.md](opponent_model.py.md#deepen)). |
 | GET | `/api/position?moves=a,b&opponent=&speed=` | [`reports.position`](reports.py.md#position); 400 on illegal moves. |
 | GET | `/api/queue` | `{jobs, worker}`. |
 | GET | `/api/settings` | `{settings, defaults, speeds}`. |

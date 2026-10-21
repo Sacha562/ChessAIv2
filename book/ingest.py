@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import chess
 
-from . import db, lichess_api
+from . import db, lichess_api, opponent_model
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ SPEED_ORDER = ("ultraBullet", "bullet", "blitz", "rapid", "classical", "correspo
 
 PRIORITY_MISS = 0
 PRIORITY_MANUAL = 1
+PRIORITY_DEEPEN = 3
 PRIORITY_WIDEN = 5
 PRIORITY_CANDIDATE_BASE = 10
 PRIORITY_SIGNAL = 60
@@ -140,6 +141,24 @@ def store_game(conn: sqlite3.Connection, game: ParsedGame, settings: dict) -> No
             queue_candidates(conn, board, ply)
         board.push(move)
     db.enqueue(conn, "signal", game.id, PRIORITY_SIGNAL)
+    queue_deepen_if_predictable(conn, game.opponent, settings)
+
+
+def queue_deepen_if_predictable(conn: sqlite3.Connection, opponent: str, settings: dict) -> bool:
+    """Queue an opponent-model deepen run for a predictable opponent.
+
+    An opponent qualifies with at least ``model_auto_min_games`` games and a
+    determinism of at least ``model_auto_determinism``. Re-running after each
+    new game is cheap: unchanged predictions reuse their stored values.
+    """
+    games = conn.execute("SELECT COUNT(*) FROM games WHERE opponent = ?", (opponent,)).fetchone()[0]
+    if games < int(settings["model_auto_min_games"]):
+        return False
+    share, _ = opponent_model.determinism(conn, opponent)
+    if share is None or share < float(settings["model_auto_determinism"]):
+        return False
+    db.enqueue(conn, "deepen", opponent, PRIORITY_DEEPEN, force=True)
+    return True
 
 
 def worth_analysing(conn: sqlite3.Connection, key: int, ply: int, settings: dict) -> bool:
