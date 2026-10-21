@@ -486,8 +486,11 @@ Always subtract a **move-overhead** buffer (~10–50 ms, UCI `Move Overhead`) fo
 | **A. None (GUI supplies openings)** | Modern top engines often ship no book; testing frameworks feed opening positions anyway. | **Perfectly fine, and simplest.** |
 | **B. Consume a Polyglot `.bin`** | Binary-search a sorted array of 16-byte entries by Polyglot Zobrist key; play a weighted move. | Easy to add; huge public books exist. **Add if you want book play out of the box.** |
 | **C. Own internal book + learning** | Custom format, adjust weights by results. | More code; defer unless you specifically want book learning. |
+| **D. Opponent-aware learning book for lichess (outside the engine)** | Python service ([`book/`](book/__init__.py.md)) next to lichess-bot: per-opponent × per-speed Beta posteriors over a blended result/Stockfish-eval signal, Thompson sampling, pooled fallback for unknown opponents, Stockfish-generated tiered candidates that unlock per opponent, replay of won games vs deterministic bots, local dashboard. The engine stays plain UCI. | **Chosen for lichess play** (SmikkelBot meets the same bots repeatedly). Does not affect SPRT testing. |
 
 **→ My recommendation: A now, add B (read-only Polyglot) if/when you want it.** Skip writing a book generator (C). Note: your SPRT testing (Component 29) uses opening *suites*, not a book, so this doesn't block strength work.
+
+**→ Decision (2026-10): A inside the engine + D for lichess.** The engine binary has no book; lichess games get their openings from the `book/` service (15-move horizon), wired in through a lichess-bot `homemade` engine class. See [book/__init__.py.md](book/__init__.py.md).
 
 ## Component 25 — Endgame tablebases
 
@@ -619,7 +622,7 @@ If you just want my complete recommended set to accept wholesale, it's:
 | 21 TT | bucketed + lock-less XOR + aged + multiply-shift |
 | 22 Zobrist | **A** — `board.hash()` |
 | 23 Time mgmt | fixed base + soft/hard + stability + overhead |
-| 24 Book | **A** none (optional read-only Polyglot) |
+| 24 Book | **A** none in-engine; **D** opponent-aware learning book for lichess (`book/`) |
 | 25 Tablebases | **A** — Syzygy 3–4–5 via Fathom |
 | 26 Parallel | **A** — Lazy SMP |
 | 27 Protocol | **A** — UCI |
@@ -687,7 +690,7 @@ Fill in a pick per line (or write "default"):
 21. Transposition table ........ [ default bucketed/lockless | custom ]
 22. Zobrist .................... [ A board.hash() | B custom ]
 23. Time management ............ [ A fixed | +B soft/hard | +C stability | +D node ]
-24. Opening book ............... [ A none | B Polyglot read | C own ]
+24. Opening book ............... [ A none | B Polyglot read | C own | D lichess opponent-aware ]
 25. Tablebases ................. [ A Syzygy 3-4-5 | B +6-man | none ]
 26. Parallel search ............ [ A Lazy SMP | B YBWC | C root | none/single ]
 27. Protocol ................... [ A UCI | B CECP | both ]

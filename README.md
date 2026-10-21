@@ -180,6 +180,23 @@ python3 scripts/watch_selfplay.py ./chessai --nodes 20000 -o /mnt/c/Users/you/ga
 
 Flags: [`scripts/watch_selfplay.py.md`](scripts/watch_selfplay.py.md).
 
+## Opening book for lichess (`book/`)
+
+SmikkelBot plays lichess through lichess-bot (Docker). The [`book/`](book/__init__.py.md)
+service learns which openings work against **each opponent at each time control**,
+falling back to results against all other opponents at that speed for newcomers.
+It generates candidate moves with Stockfish, replays won games against bots that
+repeat themselves, and has a local dashboard to inspect opponents, explore
+positions, and add candidate moves by hand. It runs as a `book` service (with Stockfish 19) in the same Docker Compose stack
+as lichess-bot (`LichessBotAPI/`), which builds it from this checkout:
+
+```bash
+docker compose up -d --build      # from LichessBotAPI/; dashboard at http://127.0.0.1:8765
+```
+
+Setup details (`homemade.py` shim, `config.yml`, local development):
+[book/__init__.py.md](book/__init__.py.md#how-to-build--run).
+
 ## Layout
 
 Every module has a colocated `.md` companion describing what it does (e.g.
@@ -206,4 +223,5 @@ tools/tune.cpp          Texel tuner
 scripts/match.py        engine-vs-engine match / SPRT runner (fastchess wrapper)
 scripts/run_checks.py   commit gate (build, tests, perft, bench, docs, style)
 scripts/watch_selfplay.py   self-play -> standalone HTML board viewer
+book/                   opponent-aware lichess opening book + dashboard (Python)
 ```

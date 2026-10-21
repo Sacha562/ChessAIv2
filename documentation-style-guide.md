@@ -117,6 +117,28 @@ scripts/
 
 For Python and other non-C++ tooling, the companion is simply `<full filename>.md` (per-file, no header-keying — that only applies to C++ modules).
 
+### 2.8 The opening-book package (`book/`)
+
+The opponent-aware opening book ([book/__init__.py.md](book/__init__.py.md)) is a Python package with a small web dashboard. It follows the tooling rule of §2.7 for **every** file, including the frontend:
+
+```
+book/
+  selector.py
+  selector.py.md         <- one companion per Python file
+  static/
+    app.js
+    app.js.md            <- one companion per frontend file (.html, .js, .css)
+    style.css
+    style.css.md
+  tests/
+    test_book.py
+    test_book.py.md      <- test companion, structured per Section 4.2
+```
+
+- Python module companions use the Section 4.1 layout adapted to Python: `# Module: \`book.<name>\``, description, **Source File**, **Related Test Documentation**, **Objects / Interfaces** (dataclasses, constants), **Functions** (module-level functions, and methods as `Class.method`). Python has no `const&`; state instead whether an argument is mutated, and whether a function commits the SQLite transaction.
+- Frontend companions (`.html`, `.js`, `.css`) describe structure, not signatures: what the file renders or styles, the routes/views and the API endpoints each calls, the design tokens, and any non-obvious behavior.
+- [`scripts/check_docs_sync.py`](scripts/check_docs_sync.py) enforces this: `.html`, `.js` and `.css` are in its `TOOLING_EXTS` alongside `.py`. `book/.venv/` (third-party packages) and `book/data/` (runtime database) are excluded.
+
 ---
 
 ## 3. Link Format Rules
@@ -462,6 +484,7 @@ Never commit secret values into documentation (not that an engine has many — b
 | Doc for a source-only file | Source filename + `.md` | `main.cpp.md` |
 | Doc for a test file | Test filename + `.md` | `test_see.cpp.md` |
 | Doc for a tooling script | Full filename + `.md` | `check_docs_sync.py.md` |
+| Doc for a dashboard frontend file | Full filename + `.md` | `app.js.md` |
 | Build / toolchain | Always `build.md` | `build.md` |
 | Vendored library | (none — excluded) | `include/chess.hpp` |
 
@@ -611,7 +634,7 @@ For reviewers familiar with the original. This is the delta driven purely by the
 
 **Changed / added for C++:**
 - **Companion mapping is header-keyed.** A header + source pair shares **one** doc named after the header (`eval.hpp.md`), rather than one doc per file. Source-only and header-only files key off their single file.
-- **Documented file extensions** are C++ (`.hpp .h .hxx .cpp .cc .cxx`) plus tooling (`.py`). The vendored `include/chess.hpp` is excluded.
+- **Documented file extensions** are C++ (`.hpp .h .hxx .cpp .cc .cxx`) plus tooling (`.py`, and `.html .js .css` for the opening-book dashboard, §2.8). The vendored `include/chess.hpp` is excluded.
 - **Objects / Interfaces** covers C++ kinds — `class`, `struct`, `enum`/`enum class`, `union`, `concept`, `using`/`typedef` aliases, templates, and named `constexpr` constant sets — replacing Python `dataclass`/`TypedDict`/Pydantic and TS `interface`/`type`.
 - **Functions** gained a **Template Parameters** subsection, **member-function** and **operator-overload** heading conventions, **overload/anchor-collision** disambiguation, and a **Performance** note for hot-path code. Parameter tables carry `const`/reference/pointer/ownership and in/out semantics; returns carry reference/pointer lifetime.
 - **How to Run** became **How to Build & Run** (compile with CMake/Make, then `./chessai …`), not `python x.py`.

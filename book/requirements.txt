@@ -1,0 +1,5 @@
+chess==1.11.2
+fastapi==0.156.8
+uvicorn==0.54.0
+# tests only (fastapi.testclient)
+httpx2==2.16.0

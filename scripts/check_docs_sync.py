@@ -46,8 +46,9 @@ HEADER_EXTS = {".hpp", ".h", ".hxx"}
 SOURCE_EXTS = {".cpp", ".cc", ".cxx"}
 CPP_EXTS = HEADER_EXTS | SOURCE_EXTS
 
-# Non-C++ first-party tooling that gets a plain per-file ``<file>.md`` companion.
-TOOLING_EXTS = {".py"}
+# Non-C++ first-party tooling that gets a plain per-file ``<file>.md`` companion:
+# Python plus the opening-book dashboard's frontend files (style guide §2.7).
+TOOLING_EXTS = {".py", ".html", ".js", ".css"}
 
 # Build files map to the single root build.md (soft rule): editing one requires
 # build.md to change, per style guide §2.5 / §4.3.

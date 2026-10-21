@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmikkelBot Book</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">SmikkelBot Book</span>
+    <nav>
+      <a href="#/overview" data-nav="overview">Overview</a>
+      <a href="#/opponents" data-nav="opponents">Opponents</a>
+      <a href="#/explore" data-nav="explore">Explorer</a>
+      <a href="#/queue" data-nav="queue">Queue</a>
+      <a href="#/settings" data-nav="settings">Settings</a>
+    </nav>
+    <span id="worker-badge" class="badge">…</span>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -43,7 +43,7 @@ Module-level sets that encode the placement rules. Keep these in lockstep with
 | `HEADER_EXTS` | Header extensions (`.hpp .h .hxx`) — a header keys its module's doc. |
 | `SOURCE_EXTS` | Source extensions (`.cpp .cc .cxx`) — keyed to a sibling header if one exists. |
 | `CPP_EXTS` | `HEADER_EXTS ∪ SOURCE_EXTS`; the hard-rule C++ set. |
-| `TOOLING_EXTS` | Non-C++ first-party tooling (`.py`) that gets a plain per-file companion. |
+| `TOOLING_EXTS` | Non-C++ first-party tooling (`.py`, plus the dashboard frontend's `.html`/`.js`/`.css`) that gets a plain per-file companion. |
 | `BUILD_BASENAMES` / `BUILD_EXTS` | Build files (`CMakeLists.txt`, `Makefile`, `*.cmake`) that soft-map to `build.md`. |
 | `BUILD_DOC` | `"build.md"` — the single build/toolchain doc. |
 | `VENDORED_PREFIXES` | Path prefixes that are third-party and never checked (`include/`). |
