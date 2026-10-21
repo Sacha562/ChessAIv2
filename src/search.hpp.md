@@ -116,19 +116,19 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
 | `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
 | `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
-| `lmrBase` | `int` | `68` | LMR reduction offset ×100 (`LmrBase`); `0.68` in the curve. |
-| `lmrDivisor` | `int` | `162` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.62` in the curve (kept ≥ 1). |
+| `lmrBase` | `int` | `63` | LMR reduction offset ×100 (`LmrBase`); `0.63` in the curve. |
+| `lmrDivisor` | `int` | `142` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.42` in the curve (kept ≥ 1). |
 | `nmpBase` | `int` | `1` | Null-move base reduction `R` (`NmpBase`). |
-| `nmpEvalDiv` | `int` | `176` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `nmpEvalDiv` | `int` | `168` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
 | `rfpMargin` | `Value` | `68` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
-| `futMargin` | `Value` | `86` | Futility margin per remaining ply, cp (`FutMargin`). |
-| `futBase` | `Value` | `77` | Futility base margin, cp (`FutBase`). |
+| `futMargin` | `Value` | `79` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `73` | Futility base margin, cp (`FutBase`). |
 | `lmpBase` | `int` | `4` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
 | `singularMinDepth` | `int` | `7` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
 | `singularMargin` | `int` | `1` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
 | `singularDoubleMargin` | `int` | `46` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
 | `histPruneMargin` | `int` | `2048` | History-pruning threshold per remaining ply (`HistPruneMargin`): a late quiet scoring below `−histPruneMargin·depth` is skipped. History-score units, not cp. |
-| `histLmrDiv` | `int` | `8192` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
+| `histLmrDiv` | `int` | `7512` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
 | `razorBase` | `Value` | `180` | Razoring base margin, cp (`RazorBase`). |
 | `razorMargin` | `Value` | `160` | Razoring margin per remaining ply, cp (`RazorMargin`); the gate is `eval + razorBase + razorMargin·depth <= alpha`. |
 | `probCutMinDepth` | `int` | `5` | Minimum depth at which ProbCut is attempted (`ProbCutMinDepth`). |
@@ -142,6 +142,11 @@ SPSA-tuned at the end of Phase 1b on the material-only eval (**+82 ± 20 Elo**),
 96k games @ STC 10+0.1) — the re-tuned set above beat the Phase 1b defaults by **+26.2 ± 10
 Elo** (SPRT accepted @ LTC 40+0.4). The `NmpBase` / `LmpBase` tuning floor was relaxed from
 1 to 0 for that re-tune; `LmpBase` then settled at `4` and `NmpBase` stayed at `1`.
+After Phase 1d landed correction history + history-LMR, the eval-gated margins and the LMR
+curve were **re-tuned a third time** (OpenBench, 7 params: `lmrBase`, `lmrDivisor`,
+`nmpEvalDiv`, `rfpMargin`, `futMargin`, `futBase`, `histLmrDiv`; 45k games @ STC 10+0.1).
+The result — more LMR, slightly tighter futility, `rfpMargin` unchanged — beat the previous
+defaults by **+6.1 ± 4.3 Elo** (9476 games, SPRT `[0, 5]` accepted @ LTC 40+0.4).
 Only the margins are tunable; the structural gates (min depths, `LMR_MIN_MOVES`, etc.) stay
 `constexpr`. `lmrBase` / `lmrDivisor` are integer-scaled ×100 because the tuner works in
 integers; they are divided when the LMR table is (re)built
@@ -159,7 +164,8 @@ search reproduces the plain PVS + step-1-ordering engine.
 The **Phase 1d knobs** (`useHistPrune` / `histPruneMargin`, `useHistLmr` / `histLmrDiv`)
 are denominated in **history-score units**, not centipawns: the quiet score they read is
 the butterfly + continuation sum, which lives in `±(1 + CONT_PLIES) · MAX_HISTORY`
-(`±49152`). Both are seeds pending an SPSA pass; the depth gate `HIST_PRUNE_MAX_DEPTH` and
+(`±49152`). `histLmrDiv` is SPSA-tuned (`8192` seed → `7512`); `histPruneMargin` stays a
+seed, since history pruning ships off; the depth gate `HIST_PRUNE_MAX_DEPTH` and
 the `HIST_LMR_MAX_PLIES` cap stay `constexpr`.
 
 **Default rationale (Phase 1d, A/B @ STC 10+0.1, UHO book).** Every Phase 1d feature was
@@ -182,9 +188,10 @@ history off — measured **+32.5 ± 11.6 Elo** vs the all-off (== 0.1c) configur
 Because each was measured in isolation, the numbers are **not additive**: they overlap
 (history-LMR and history pruning read the same score; correction history moves the eval
 that futility and RFP gate on), so the stack total is settled by a cumulative test, not by
-summing the column. Correction history in particular is expected to *under*-read here —
-`rfpMargin` / `futMargin` / `futBase` / `nmpEvalDiv` were SPSA-tuned at `87fa8a1` against
-the **uncorrected** eval's error distribution, so a joint re-tune is the natural follow-up.
+summing the column. Correction history in particular under-read here — `rfpMargin` /
+`futMargin` / `futBase` / `nmpEvalDiv` had been SPSA-tuned at `87fa8a1` against the
+**uncorrected** eval's error distribution — so they were jointly re-tuned on top of this stack
+(see the margins note above: **+6.1 ± 4.3 Elo** @ LTC).
 
 The **Phase 1c knobs** (`useContHist`, and the singular set `useSingular` /
 `singularMinDepth` / `singularMargin` / `singularDoubleMargin`) are new this phase; the

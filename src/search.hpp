@@ -97,19 +97,19 @@ struct Tunables {
     // divisor are stored x100 (integer knobs for the tuner) and divided when the LMR
     // reduction table is built. Structural gates (min depths, move counts) stay
     // constexpr in search.cpp.
-    int   lmrBase    = 68;  // LMR reduction offset, x100 (0.68)
-    int   lmrDivisor = 162; // LMR ln*ln divisor,  x100 (1.62); must stay >= 1
+    int   lmrBase    = 63;  // LMR reduction offset, x100 (0.63)
+    int   lmrDivisor = 142; // LMR ln*ln divisor,  x100 (1.42); must stay >= 1
     int   nmpBase    = 1;   // null-move base reduction R
-    int   nmpEvalDiv = 176; // null-move eval-margin divisor (cp of eval over beta per +1 R)
+    int   nmpEvalDiv = 168; // null-move eval-margin divisor (cp of eval over beta per +1 R)
     Value rfpMargin  = 68;  // reverse-futility margin per remaining ply (cp)
-    Value futMargin  = 86;  // futility margin per remaining ply (cp)
-    Value futBase    = 77;  // futility base margin (cp)
+    Value futMargin  = 79;  // futility margin per remaining ply (cp)
+    Value futBase    = 73;  // futility base margin (cp)
     int   lmpBase    = 4;   // late-move-pruning quiet-count base (count = base + depth^2)
 
     // Phase 1d history-selectivity knobs, in history-score units (the quiet band is
     // +/-(1 + CONT_PLIES) * MAX_HISTORY = +/-49152).
     int histPruneMargin = 2048; // skip a late quiet scoring below -margin * depth
-    int histLmrDiv      = 8192; // history score per one ply of LMR adjustment (>= 1)
+    int histLmrDiv      = 7512; // history score per one ply of LMR adjustment (>= 1)
 
     // Phase 1d whole-node pruning margins (cp).
     Value razorBase       = 180; // razoring base margin

@@ -104,14 +104,16 @@ margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
 `NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, the **Phase 1c
 singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, and the
 **Phase 1d history knobs** `HistPruneMargin` (default `2048`) / `HistLmrDiv` (default
-`8192`), which are in **history-score units** (the quiet band is `±49152`), not
+`7512`, SPSA-tuned), which are in **history-score units** (the quiet band is `±49152`), not
 centipawns, and the **Phase 1d whole-node pruning margins** `RazorBase` (`180`) /
 `RazorMargin` (`160`) / `ProbCutMinDepth` (`5`) / `ProbCutMargin` (`180`) in cp — all exposed
 as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
 the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eval, **+82 ±
 20 Elo**), then **re-tuned on the full Phase 1c HCE eval** (OpenBench, 11 params incl. the
 singular knobs, 96k games @ STC), which beat the Phase 1b defaults by **+26.2 ± 10 Elo**
-(SPRT accepted @ LTC 40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
+(SPRT accepted @ LTC 40+0.4), and re-tuned once more after Phase 1d (`LmrBase`, `LmrDivisor`,
+`NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `HistLmrDiv` on the correction-history
+eval; **+6.1 ± 4.3 Elo** @ LTC 40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
 **railed at the old floor of `1`** in the Phase 1b tune, so the floor was relaxed to `0` for
 the re-tune — which then settled `LmpBase` at `4` and kept `NmpBase` at `1` (neither wanted
 below 1). `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
