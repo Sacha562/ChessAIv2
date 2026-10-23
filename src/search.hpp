@@ -3,8 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include "corrhist.hpp"
 #include "history.hpp"
+#include "nnue.hpp"
 #include "types.hpp"
 
 namespace engine {
@@ -147,11 +149,12 @@ struct Tunables {
 // time management.
 // One instance per search; the shared `state` lets the UCI thread stop it or end its
 // pondering, and the transposition table is shared (and outlives the searcher) so
-// results persist across moves and, later, across threads.
+// results persist across moves and, later, across threads. With a network the static
+// eval is NNUE (the network must outlive the searcher); without one it is the HCE.
 class Searcher {
 public:
-    Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp = {})
-        : state_(state), tt_(tt), tp_(tp) {}
+    Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp = {},
+             const nnue::Network* net = nullptr);
 
     // Runs the search on a copy of `board`. Prints `info` lines when
     // `printInfo`, and a final `bestmove ... ponder ...` line when `printBest`.
@@ -174,6 +177,14 @@ private:
     // correction history is off). `raw` is passed in so a caller can reuse a TT-cached
     // static eval instead of re-evaluating.
     Value correctedEval(const Board& board, Value raw) const;
+
+    // The raw static eval of the node at `ply`: NNUE from that ply's accumulator when a
+    // network is loaded, else the hand-crafted eval.
+    Value staticEval(const Board& board, int ply) const;
+
+    // Make a move (or a null move) at `ply`, first deriving the child's accumulator.
+    void makeMove(Board& board, Move move, int ply);
+    void makeNullMove(Board& board, int ply);
 
     void    setupTiming(const Limits& limits, const Board& board);
     bool    checkStop();
@@ -201,11 +212,16 @@ private:
     std::atomic<SearchState>& state_;
     TranspositionTable&       tt_;
     Tunables                  tp_;
-    uint64_t                  nodes_ = 0;
-    History                   history_;      // quiet-move ordering heuristics (per search)
-    CorrectionHistory         corrHist_;     // learned static-eval correction (per search)
-    Value   staticEvals_[MAX_PLY]{};         // per-ply static eval, for RFP/futility/improving
-    uint8_t reductions_[LMR_DIM][LMR_DIM]{}; // LMR reduction table (see buildReductions)
+    const nnue::Network*      net_ = nullptr; // not owned; nullptr = hand-crafted eval
+
+    // One accumulator per ply (index = ply), heap-allocated once per search so the
+    // searcher stays small enough for a thread's stack. Allocated only with a network.
+    std::unique_ptr<std::array<nnue::Accumulator, MAX_PLY + 1>> accumulators_;
+    uint64_t                                                    nodes_ = 0;
+    History           history_;                // quiet-move ordering heuristics (per search)
+    CorrectionHistory corrHist_;               // learned static-eval correction (per search)
+    Value             staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
+    uint8_t           reductions_[LMR_DIM][LMR_DIM]{}; // LMR reduction table (see buildReductions)
 
     // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
     // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds

@@ -257,13 +257,18 @@ can stop it mid-search or end its pondering), a
 [`TranspositionTable&`](tt.hpp.md#class-transpositiontable) it shares with the owner
 (so results persist across moves and, later, across threads), and an optional
 [`Tunables`](#struct-tunables) (defaulted for callers like [bench](bench.hpp.md) that
-just want the defaults).
+just want the defaults), and an optional [`nnue::Network`](nnue.hpp.md#struct-network)
+pointer: with a network the static eval is NNUE, without one (the default, and what
+[bench](bench.hpp.md) and [datagen](datagen.hpp.md) pass) it is the hand-crafted
+[`evaluate`](eval.hpp.md#evaluate). See [`Searcher::Searcher`](#searchersearcher).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `state_` | [`std::atomic<SearchState>&`](#enum-class-searchstate) | Shared search state, owned and written by the UCI thread; read here to stop, to leave ponder mode, and to wait before `bestmove`. |
 | `tt_` | `TranspositionTable&` | Shared transposition table (owned by the caller; outlives the searcher). |
 | `tp_` | `Tunables` | Self-play-tunable knobs (time, eval tempo, q-search delta) for this search. |
+| `net_` | `const `[`nnue::Network`](nnue.hpp.md#struct-network)`*` | The NNUE network, **not owned** (the [uci](uci.hpp.md#class-engine-internal) `Engine` owns it and keeps it alive for the search); `nullptr` selects the hand-crafted eval. |
+| `accumulators_` | `std::unique_ptr<std::array<`[`nnue::Accumulator`](nnue.hpp.md#struct-accumulator)`, MAX_PLY + 1>>` | One accumulator per ply (index = ply, 2 KB each, ~258 KB total). Heap-allocated once in the constructor, and only when `net_` is set, so the searcher stays small enough for a thread's stack. Entry 0 is refreshed from the root in [`think`](#searcherthink); every make writes entry `ply + 1`. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves) for this search. |
 | `corrHist_` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Learned per-pawn-structure static-eval correction for this search (64 KB, zeroed on construction). |
@@ -286,7 +291,7 @@ just want the defaults).
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 | `rootScore_` | `Value` | Score of the last **completed** iteration (side-to-move cp; `VALUE_ZERO` until one completes). Read through [`score`](#searcherscore). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
+**Methods:** [`Searcher::Searcher`](#searchersearcher), [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::staticEval`](#searcherstaticeval), [`Searcher::makeMove` / `makeNullMove`](#searchermakemove--searchermakenullmove-private), [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md), [datagen](datagen.hpp.md)
 
@@ -322,7 +327,8 @@ the same [`awaitRelease`](#searcherawaitrelease) wait).
 **Side Effects:** writes to `std::cout` (`info` / `bestmove`, including a
 `hashfull` field from [`tt_.hashfull()`](tt.hpp.md#transpositiontablehashfull));
 calls [`tt_.newSearch()`](tt.hpp.md#transpositiontablenewsearch) once to advance the
-TT generation; resets and updates all timing/node/root-move/PV/ponder members. Reads
+TT generation; with a network, refreshes `accumulators_[0]` from the root position
+([`nnue::refresh`](nnue.hpp.md#refresh)); resets and updates all timing/node/root-move/PV/ponder members. Reads
 the shared [`state_`](#enum-class-searchstate) (never writes it); may block on it at the
 end. With `printBest`, probes the TT once more for the ponder reply.
 
@@ -424,7 +430,7 @@ searched exactly.
 **Selective-search steps** (each gated by its [`Tunables`](#struct-tunables) toggle):
 
 - **Static eval & `improving`** — at a non-check node the **raw** static eval is read from
-  the TT (`tt.eval`) or computed by [`evaluate`](eval.hpp.md#evaluate), then
+  the TT (`tt.eval`) or computed by [`staticEval`](#searcherstaticeval) (NNUE or HCE), then
   [`correctedEval`](#searchercorrectedeval) adds the
   [correction-history](corrhist.hpp.md) adjustment for this pawn structure; the
   **corrected** value is what lands in `staticEvals_[ply]` and drives every downstream
@@ -642,6 +648,41 @@ gating to `depth >= 5` avoids the noisy shallow iterations. The final in-window 
 sets [`rootBest_`](#class-searcher) correctly; an aborted re-search (`timeUp_`) is
 discarded by [`think`](#searcherthink) like any incomplete iteration.
 
+### `Searcher::Searcher`
+
+Construct a searcher. Stores the shared `state` and `tt` references, copies `tp`, and
+keeps `net` (not owned). With a network it also allocates `accumulators_` (one heap
+allocation per searcher, never per node).
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `state` | `std::atomic<`[`SearchState`](#enum-class-searchstate)`>&` | Shared lifecycle flag the search polls. |
+| `tt` | [`TranspositionTable&`](tt.hpp.md#class-transpositiontable) | Shared TT; must outlive the searcher. |
+| `tp` | [`Tunables`](#struct-tunables) | Knobs for this search (default `{}`). |
+| `net` | `const `[`nnue::Network`](nnue.hpp.md#struct-network)`*` | NNUE network (default `nullptr` = hand-crafted eval); must outlive the searcher. |
+
+### `Searcher::staticEval` (private)
+
+Return the raw static eval ([`Value`](types.hpp.md#using-value--int), side-to-move cp) of
+the node at `ply`: [`nnue::evaluate`](nnue.hpp.md#evaluate) on `accumulators_[ply]` when a
+network is loaded, else [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`. The
+network ignores `Tempo` (it learned the side-to-move effect itself). The result is what
+goes into the TT; [`correctedEval`](#searchercorrectedeval) is applied on top as before.
+**Performance:** per node; the NNUE path is one 1024-wide SCReLU dot product.
+
+### `Searcher::makeMove` / `Searcher::makeNullMove` (private)
+
+Make `move` (or a null move) on `board` at `ply`, first writing the child's accumulator
+`accumulators_[ply + 1]`: [`nnue::update`](nnue.hpp.md#update) from the parent for a real
+move, a plain copy for a null move (no piece moves). Without a network they reduce to
+`board.makeMove` / `board.makeNullMove`. Every move made inside the tree goes through them
+(main search, NMP, ProbCut, q-search); unmake needs no counterpart, since the parent's
+accumulator at `ply` is never overwritten by its children. A singular verification
+re-searches the same ply, so it reuses that ply's accumulator unchanged.
+**Performance:** per make; a quiet move is one fused add+subtract pass over 512 int16s per
+perspective, a capture or castle one more column.
+
 ### `Searcher::correctedEval` (private)
 
 The static eval as the search reasons about it: `raw` plus the
@@ -698,7 +739,7 @@ uses **no TT** of its own.
 when aborting (`timeUp_`).
 
 **Behavior:**
-- **Stand-pat**: when *not* in check, [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`
+- **Stand-pat**: when *not* in check, [`staticEval`](#searcherstaticeval)`(board, ply)`
   — passed through [`correctedEval`](#searchercorrectedeval), so q-search and the main
   search agree on what a position is worth —
   seeds `best` as a lower bound; return immediately on `best >= beta`, else raise `alpha`. When

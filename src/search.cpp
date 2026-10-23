@@ -115,6 +115,28 @@ std::string scoreToUci(Value v) {
 }
 } // namespace
 
+Searcher::Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp,
+                   const nnue::Network* net)
+    : state_(state), tt_(tt), tp_(tp), net_(net) {
+    if (net_) accumulators_ = std::make_unique<std::array<nnue::Accumulator, MAX_PLY + 1>>();
+}
+
+Value Searcher::staticEval(const Board& board, int ply) const {
+    if (!net_) return evaluate(board, tp_.tempo);
+    return nnue::evaluate(*net_, (*accumulators_)[ply], board.sideToMove());
+}
+
+void Searcher::makeMove(Board& board, Move move, int ply) {
+    if (net_) nnue::update(*net_, board, move, (*accumulators_)[ply], (*accumulators_)[ply + 1]);
+    board.makeMove(move);
+}
+
+// A null move changes no piece, so the child's accumulator is the parent's.
+void Searcher::makeNullMove(Board& board, int ply) {
+    if (net_) (*accumulators_)[ply + 1] = (*accumulators_)[ply];
+    board.makeNullMove();
+}
+
 int64_t Searcher::elapsedMs() const {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now() - start_).count();
@@ -306,8 +328,8 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         eval              = VALUE_NONE;
         staticEvals_[ply] = VALUE_NONE;
     } else {
-        rawEval = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : evaluate(board, tp_.tempo);
-        eval    = correctedEval(board, rawEval);
+        rawEval           = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : staticEval(board, ply);
+        eval              = correctedEval(board, rawEval);
         staticEvals_[ply] = eval;
     }
     const bool improving =
@@ -345,7 +367,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             const int R = tp_.nmpBase + depth / NMP_DIV +
                           std::min<int>((eval - beta) / tp_.nmpEvalDiv, NMP_EVAL_MAX);
             contPiece_[ply] = -1; // a null move leaves the child no continuation context
-            board.makeNullMove();
+            makeNullMove(board, ply);
             const Value nullScore =
                 -search(board, depth - 1 - R, -beta, -beta + 1, ply + 1, Move(Move::NO_MOVE));
             board.unmakeNullMove();
@@ -371,7 +393,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 
                 contPiece_[ply] = static_cast<int>(board.at(m.from()));
                 contTo_[ply]    = m.to().index();
-                board.makeMove(m);
+                makeMove(board, m, ply);
                 Value score = -qsearch(board, -probBeta, -probBeta + 1, ply + 1);
                 if (score >= probBeta)
                     score = -search(board, depth - PROBCUT_REDUCTION, -probBeta, -probBeta + 1,
@@ -478,7 +500,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         tt_.prefetch(board.zobristAfter(m));
         contPiece_[ply] = movedPiece; // search-stack record for the child's continuation history
         contTo_[ply]    = m.to().index();
-        board.makeMove(m);
+        makeMove(board, m, ply);
         const bool givesCheck = board.inCheck();
 
         // Extensions: the singular extension decided above plus a check extension for a
@@ -618,12 +640,12 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     // forbidden in check, where the side to move must answer the threat.
     Value best = -VALUE_INFINITE;
     if (!inCheck) {
-        best = correctedEval(board, evaluate(board, tp_.tempo));
+        best = correctedEval(board, staticEval(board, ply));
         if (best >= beta) return best; // fail-soft beta cutoff
         if (best > alpha) alpha = best;
     }
     if (ply >= MAX_PLY - 1)
-        return inCheck ? evaluate(board, tp_.tempo) : best; // depth guard: stop descending
+        return inCheck ? staticEval(board, ply) : best; // depth guard: stop descending
 
     // In check: search every evasion, ordered like a main node. Otherwise: only
     // captures / capture-promotions, MVV-LVA ordered.
@@ -659,7 +681,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
             if (!seeGE(board, m, 0)) continue;
         }
 
-        board.makeMove(m);
+        makeMove(board, m, ply);
         const Value score = -qsearch(board, -beta, -alpha, ply + 1);
         board.unmakeMove(m);
 
@@ -743,6 +765,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     }
 
     setupTiming(limits, board);
+    if (net_) nnue::refresh(*net_, board, (*accumulators_)[0]);
 
     // Cap the root depth at MAX_PLY - 1 so a huge `go depth N` can't run the
     // iterative-deepening loop itself past the per-ply tables. (A node's `ply` can still
