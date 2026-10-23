@@ -33,7 +33,7 @@ kernels are deferred until a bigger net makes inference the bottleneck.
   `engine` (`using chess::Color;`, as [history](history.hpp.md) does).
 - Internal linkage (anonymous namespace in `nnue.cpp`): `NUM_SQUARES`, `THEIR_OFFSET`,
   `FLIP_RANKS`, `NETWORK_BYTES`, the layout `static_assert`s, the `Feature` / `Delta` structs,
-  and the helpers `featureIndex`, `moveDelta`, `applyDelta`, `screlu`.
+  and the helpers `featureIndex`, `moveDelta`, `applyDelta`, `screlu`, `activatedDot`.
 - At global scope in `nnue.cpp`, only when the network is embedded: the top-level `asm`
   block and the `extern "C"` symbols `chessai_net_begin` / `chessai_net_end` it defines,
   plus the `CHESSAI_HAS_EMBEDDED_NET` build flag. They are not declared in the header;
@@ -206,7 +206,12 @@ describes, in centipawns from `stm`'s point of view (`Color`), clamped clear of 
 range. Applies SCReLU to both perspectives, takes the dot product with `outputWeights`, adds
 the bias, and rescales (see [The network](#the-network)).
 
-**Performance:** per node; 1024 multiply-adds into an `int32` sum.
+**Performance:** per node; 1024 multiply-adds into an `int32` sum, done as two
+single-stream dot products (`activatedDot`, one per perspective). That shape matters: with
+both perspectives accumulated in one loop, MinGW GCC 13 (the Windows release compiler) left
+the loop scalar and NNUE ran at ~0.97M nps against ~3.0M on Linux. Split, it vectorises
+(AVX2) on every compiler, and the Windows build searches at ~3.1M nps. Integer addition is
+associative, so the change left every score, and the bench signature, unchanged.
 
 **Warnings:** the sum is `int32`, like bullet's reference inference. Its theoretical worst
 case (every lane saturated against maximal weights) exceeds the range, but trained networks

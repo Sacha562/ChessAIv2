@@ -128,6 +128,16 @@ int32_t screlu(int16_t x) {
     const int32_t v = std::clamp<int32_t>(x, 0, QA);
     return v * v;
 }
+
+// One perspective's share of the output: sum of SCReLU(acc[i]) * weights[i]. Kept as a
+// single-stream reduction because MinGW GCC 13 (the Windows release compiler) leaves the
+// two-perspective form of this loop scalar, ~3x slower; this form vectorises everywhere.
+int32_t activatedDot(const std::array<int16_t, HIDDEN>& acc, const int16_t* weights) {
+    int32_t sum = 0;
+    for (int i = 0; i < HIDDEN; ++i)
+        sum += screlu(acc[i]) * weights[i];
+    return sum;
+}
 } // namespace
 
 std::unique_ptr<Network> loadNetwork(const std::string& path) {
@@ -201,11 +211,8 @@ Value evaluate(const Network& net, const Accumulator& acc, Color stm) {
 
     // int32 is the reference implementation's accumulator width; real activations stay
     // far below its range (the theoretical worst case does not occur in play).
-    int32_t sum = 0;
-    for (int i = 0; i < HIDDEN; ++i) {
-        sum += screlu(ours[i]) * net.outputWeights[i];
-        sum += screlu(theirs[i]) * net.outputWeights[HIDDEN + i];
-    }
+    const int32_t sum = activatedDot(ours, net.outputWeights.data()) +
+                        activatedDot(theirs, net.outputWeights.data() + HIDDEN);
 
     // QA^2 * QB units -> QA * QB, add the bias, then scale to centipawns.
     const int32_t output = (sum / QA + net.outputBias) * SCALE / (QA * QB);
