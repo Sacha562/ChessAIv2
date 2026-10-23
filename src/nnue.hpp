@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,6 +40,13 @@ struct Accumulator {
 
 // Load a bullet `quantised.bin`; nullptr when the file is missing or the wrong size.
 std::unique_ptr<Network> loadNetwork(const std::string& path);
+
+// Copy a network out of `size` bytes of `quantised.bin` contents; nullptr when too short.
+std::unique_ptr<Network> networkFromBytes(const unsigned char* data, std::size_t size);
+
+// The network linked into the binary at build time (the default eval), or nullptr when
+// the build embedded none. Built on first call; valid for the life of the program.
+const Network* embeddedNetwork();
 
 // Build `out` from scratch for `board`.
 void refresh(const Network& net, const Board& board, Accumulator& out);

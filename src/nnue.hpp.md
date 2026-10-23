@@ -5,9 +5,12 @@ NNUE (Efficiently Updatable Neural Network) evaluation, Phase 2 of the roadmap
 `bullet` on the engine's own self-play data ([datagen](datagen.hpp.md)). It loads the
 trainer's quantised network file, builds and incrementally updates the two hidden-layer
 **accumulators** (one per perspective) as the [search](search.hpp.md) makes moves, and
-turns them into a centipawn score. It replaces the hand-crafted [`evaluate`](eval.hpp.md#evaluate)
-whenever a network is loaded (UCI `EvalFile`, see [uci](uci.hpp.md)); the HCE stays as the
-fallback when none is.
+turns them into a centipawn score. **It is the default eval:** the build links a network
+into the binary ([`embeddedNetwork`](#embeddednetwork), see
+[The embedded network](#the-embedded-network)), which [uci](uci.hpp.md),
+[bench](bench.hpp.md) and [datagen](datagen.hpp.md) all use; UCI `EvalFile` loads another
+one in its place. The hand-crafted [`evaluate`](eval.hpp.md#evaluate) remains the fallback
+(UCI `UseNNUE false`, or a build that embeds no network).
 
 `update` and `evaluate` are on the **per-node hot path**. They are plain fixed-width
 loops over 512 `int16` lanes that the compiler auto-vectorises (`-O3 -march=native`). They
@@ -31,6 +34,26 @@ kernels are deferred until a bigger net makes inference the bottleneck.
 - Internal linkage (anonymous namespace in `nnue.cpp`): `NUM_SQUARES`, `THEIR_OFFSET`,
   `FLIP_RANKS`, `NETWORK_BYTES`, the layout `static_assert`s, the `Feature` / `Delta` structs,
   and the helpers `featureIndex`, `moveDelta`, `applyDelta`, `screlu`.
+- At global scope in `nnue.cpp`, only when the network is embedded: the top-level `asm`
+  block and the `extern "C"` symbols `chessai_net_begin` / `chessai_net_end` it defines,
+  plus the `CHESSAI_HAS_EMBEDDED_NET` build flag. They are not declared in the header;
+  [`embeddedNetwork`](#embeddednetwork) is the only way in.
+
+## The embedded network
+
+The default network is linked into the executable so the engine is one self-contained
+file ([PLAN.md](../PLAN.md) §0.4). The build passes its absolute path as the `EVALFILE`
+string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net1.bin`
+(OpenBench overrides it with `make EVALFILE=<net>`), and CMake has an `EVALFILE` cache path.
+A top-level `asm` block then `.incbin`s the file's bytes into read-only data
+(`.rodata` on ELF, `.rdata` on Windows/COFF), 64-byte aligned, between two global labels.
+
+`.incbin` is used instead of `#embed` because the MinGW GCC 13 that builds the Windows
+releases has no `#embed` (and Clang only offers it as an extension). MSVC has no GNU-style
+top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
+`embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
+file. The default network is `nets/net1.bin`, committed to the repository (789,568 bytes,
+SHA-256 `2f84fe74…31e18`); the **bench signature with it is 46577 nodes**.
 
 ## The network
 
@@ -93,8 +116,9 @@ offset. About 790 KB; always heap-allocated (by [`loadNetwork`](#loadnetwork)).
 | `outputWeights` | `std::array<int16_t, 2 * HIDDEN>` | First half weights the side to move's activations, second half the opponent's. |
 | `outputBias` | `int16_t` | Output bias, in `QA · QB` units. |
 
-**Used by:** [`Searcher`](search.hpp.md#class-searcher) (as `const Network*`, not owned),
-the [uci](uci.hpp.md#class-engine-internal) `Engine` (owns it).
+**Used by:** [`Searcher`](search.hpp.md#class-searcher) (as `const Network*`, not owned).
+Owned either by [`embeddedNetwork`](#embeddednetwork)'s static (the default) or by the
+[uci](uci.hpp.md#class-engine-internal) `Engine` (one loaded through `EvalFile`).
 
 ### `struct Accumulator`
 
@@ -118,6 +142,29 @@ trainer's padding) are ignored.
 
 **Warnings:** there is no header or checksum, so any file of the right size loads. The
 format assumes a little-endian host (x86).
+
+### `networkFromBytes`
+
+Copy a network out of a buffer holding a `quantised.bin`'s contents.
+
+**Parameters:** `data` (`const unsigned char*`) — the bytes, not retained; `size`
+(`std::size_t`) — their count.
+
+**Returns:** `std::unique_ptr<Network>` — a heap copy (so it is correctly aligned whatever
+`data`'s alignment), or `nullptr` when `data` is null or holds fewer than the 789,506 data
+bytes. Trailing bytes are ignored. **Side Effects:** none beyond the allocation.
+
+### `embeddedNetwork`
+
+Return `const Network*` — the network linked into the binary
+([The embedded network](#the-embedded-network)), or `nullptr` when the build embedded none
+(or the embedded file is too short). The first call copies the embedded bytes into a
+`Network` with [`networkFromBytes`](#networkfrombytes) inside a function-local static, so
+initialisation is thread-safe and happens once. Every later call returns the same pointer,
+valid for the life of the program and only ever read.
+
+**Used by:** [uci](uci.hpp.md#engineactivenetwork-internal), [bench](bench.hpp.md#run),
+[datagen](datagen.hpp.md#class-worker-internal).
 
 ### `refresh`
 

@@ -2,8 +2,8 @@
 
 The UCI protocol front end. Reads commands from stdin, maintains the current board,
 and dispatches to [search](search.hpp.md), [perft](perft.hpp.md), and
-[bench](bench.hpp.md), and owns the [NNUE](nnue.hpp.md) network loaded through the
-`EvalFile` option. The search runs on a separate thread so `stop`, `ponderhit`,
+[bench](bench.hpp.md). Searches use the [NNUE](nnue.hpp.md) network embedded in the
+binary by default, or one loaded through the `EvalFile` option. The search runs on a separate thread so `stop`, `ponderhit`,
 `go infinite`, and `go ponder` work while the engine keeps reading input. Invoked by
 [main](main.cpp.md) as the default mode.
 
@@ -46,8 +46,8 @@ and run by [`run_uci`](#run_uci).
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
-| `net_` | `std::unique_ptr<`[`nnue::Network`](nnue.hpp.md#struct-network)`>` | The network loaded by the `EvalFile` option, or empty (hand-crafted eval). Replaced only after [`stopSearch`](#enginestopsearch), so the pointer a running [`Searcher`](search.hpp.md#class-searcher) holds stays valid. |
-| `useNnue_` | `bool` | `UseNNUE` option (default `true`). With it off, searches use the hand-crafted eval even when a network is loaded — the switch the NNUE-vs-HCE SPRT uses on one binary. |
+| `fileNet_` | `std::unique_ptr<`[`nnue::Network`](nnue.hpp.md#struct-network)`>` | A network loaded by the `EvalFile` option, overriding the [embedded one](nnue.hpp.md#embeddednetwork); empty by default. Replaced only after [`stopSearch`](#enginestopsearch), so the pointer a running [`Searcher`](search.hpp.md#class-searcher) holds stays valid. |
+| `useNnue_` | `bool` | `UseNNUE` option (default `true`). With it off, searches use the hand-crafted eval whatever network is available — the switch an NNUE-vs-HCE SPRT uses on one binary. |
 | `tunables_` | [`Tunables`](search.hpp.md#struct-tunables) | Live self-play-tunable knobs (time management, eval `Tempo`, q-search `DeltaMargin` / `EndgamePieces`, ordering toggles `UseKillers` / `UseHistory` / `UseCountermove` / `UseContHist` / `UseIIR`, the pruning/extension toggles, and the Phase 1c singular knobs), copied into each [`Searcher`](search.hpp.md#class-searcher). |
 
 ## Functions
@@ -82,7 +82,7 @@ token sets `Limits::ponder`), set `state_` to `Pondering` for `go ponder` or `Ru
 otherwise, snapshot the board and the current
 [`Tunables`](search.hpp.md#struct-tunables), and launch a
 [`Searcher`](search.hpp.md#class-searcher) — sharing `tt_` by reference, and given
-`net_` when one is loaded and `useNnue_` is on (else `nullptr`, the hand-crafted eval) — on
+[`activeNetwork`](#engineactivenetwork-internal) when `useNnue_` is on (else `nullptr`, the hand-crafted eval) — on
 `searchThread_`. The search runs on the snapshot copy so the main thread can keep
 reading input.
 
@@ -90,7 +90,7 @@ reading input.
 
 Parse `setoption name <Name> value <Value>` and update `hashMb_` / `threads_`, the NNUE
 state, or a field of [`tunables_`](search.hpp.md#struct-tunables). `EvalFile` (`string`,
-default `<empty>`) calls [`loadEvalFile`](#engineloadevalfile-internal); `UseNNUE`
+default `<embedded>`) calls [`loadEvalFile`](#engineloadevalfile-internal); `UseNNUE`
 (`check`, default `true`) sets `useNnue_` (`value true` turns it on, anything else off).
 Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille`
@@ -148,14 +148,22 @@ stopping any search, so a fresh game starts with an empty table.
 
 ### `Engine::loadEvalFile` (internal)
 
-Load the network named by the `EvalFile` option into `net_` with
-[`nnue::loadNetwork`](nnue.hpp.md#loadnetwork). It first calls
-[`stopSearch`](#enginestopsearch) (no live search may hold the old network) and drops the
-current network. An empty path or `<empty>` leaves the engine on the hand-crafted eval.
-Otherwise it prints `info string NNUE loaded: <path>`, or
-`info string NNUE failed to load, using HCE: <path>` when the file is missing or too short.
+Load the network named by the `EvalFile` option into `fileNet_` with
+[`nnue::loadNetwork`](nnue.hpp.md#loadnetwork), in place of the embedded one. It first calls
+[`stopSearch`](#enginestopsearch) (no live search may hold the old network) and drops any
+file network. An empty path or `<embedded>` goes back to the embedded network. Otherwise it
+prints `info string NNUE loaded: <path>`, or
+`info string NNUE failed to load, keeping the embedded net: <path>` when the file is missing
+or too short.
 
 **Parameters:** `path` (`const std::string&`) — the option's value. **Returns:** `void`.
+
+### `Engine::activeNetwork` (internal)
+
+Return `const `[`nnue::Network`](nnue.hpp.md#struct-network)`*` — the network a search
+should use: `fileNet_` when `EvalFile` loaded one, else
+[`nnue::embeddedNetwork`](nnue.hpp.md#embeddednetwork) (`nullptr` in a build that embeds
+none, meaning the hand-crafted eval). Const, trivial.
 
 ### `Engine::stopSearch` (internal)
 

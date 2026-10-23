@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <random>
@@ -105,4 +106,22 @@ TEST_CASE("loadNetwork rejects a missing or short file") {
     }
     CHECK(nnue::loadNetwork(path) == nullptr);
     std::remove(path.c_str());
+}
+
+TEST_CASE("the embedded default network loads and judges material sensibly") {
+    // Built with the repo's default EVALFILE; a build that embeds nothing skips the checks.
+    const nnue::Network* net = nnue::embeddedNetwork();
+    if (net == nullptr) return;
+    CHECK(nnue::embeddedNetwork() == net); // built once, then shared
+
+    const auto eval = [net](const char* fen) {
+        const Board       board(fen);
+        nnue::Accumulator acc;
+        nnue::refresh(*net, board, acc);
+        return nnue::evaluate(*net, acc, board.sideToMove());
+    };
+    const Value start = eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    CHECK(std::abs(start) < 100);
+    CHECK(eval("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1") > 800);
+    CHECK(eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1") < -800);
 }

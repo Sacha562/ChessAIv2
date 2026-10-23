@@ -44,6 +44,15 @@ move) must give the identical [`evaluate`](../src/nnue.hpp.md#evaluate) score. R
 1.e4 and on an Italian-opening middlegame. This pins the perspective mirroring
 (`sq ^ 56`) and the own/theirs feature split.
 
+### `the embedded default network loads and judges material sensibly`
+
+When the test build embeds the default network (the Makefile and CMake pass `EVALFILE`),
+[`embeddedNetwork`](../src/nnue.hpp.md#embeddednetwork) returns the same non-null pointer on
+every call. The network scores the start position within ±100 cp, and a position missing
+Black's queen (White to move) above +800 cp, and one missing White's queen (White to move)
+below −800 cp. The bounds are loose on purpose, so retraining the default net doesn't break the
+test. A build without an embedded network skips the checks.
+
 ### `loadNetwork rejects a missing or short file`
 
 [`loadNetwork`](../src/nnue.hpp.md#loadnetwork) returns `nullptr` for a nonexistent path

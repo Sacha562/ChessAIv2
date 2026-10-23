@@ -32,7 +32,9 @@ line `<totalNodes> nodes <nps> nps`.
 ### `run`
 
 Search each of the 12 built-in positions (opening / middlegame / endgame) to a fixed
-depth with a fresh [`Searcher`](search.hpp.md#class-searcher) over a local
+depth with a fresh [`Searcher`](search.hpp.md#class-searcher) using the default eval (the
+[embedded NNUE](nnue.hpp.md#embeddednetwork), or the HCE in a build that embeds none) over
+a local
 [`TranspositionTable`](tt.hpp.md#class-transpositiontable) that is **cleared before
 each position**, accumulate the node counts, and print the benchmark summary. The
 per-position clear keeps the total independent of position order and fully
@@ -52,6 +54,11 @@ guard after changes to search/movegen.
 **Side Effects:** writes an `info string position <n> nodes <n>` line per position
 and a final `<totalNodes> nodes <nps> nps` summary. Runs [`Searcher::think`](search.hpp.md#searcherthink)
 with `printBest=false, printInfo=false`.
+
+**Signature:** **46577 nodes** with the default network `nets/net1.bin` embedded (it was
+62915 with the hand-crafted eval, before NNUE became the default). The count depends on the
+embedded network, so a different `EVALFILE` (or none) gives a different signature. `bench`
+ignores `setoption`, so `EvalFile` and `UseNNUE` never change it.
 
 **Warnings:** the node total must stay **deterministic** — do not introduce
 time-dependent or nondeterministic behavior into the searched path, or the signature

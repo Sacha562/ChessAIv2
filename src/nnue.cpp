@@ -3,9 +3,40 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 
 using namespace chess;
+
+// The default network, linked into the binary: the build passes the net file's absolute
+// path as the EVALFILE string macro and the assembler copies its bytes into read-only
+// data with `.incbin` (the portable `#embed` is missing from the MinGW GCC 13 used for
+// Windows releases). The section switch is spelled per object format because the asm
+// text must be one literal. MSVC has no GNU-style top-level asm, so it embeds nothing.
+#if defined(EVALFILE) && defined(__GNUC__)
+#define CHESSAI_HAS_EMBEDDED_NET 1
+#if defined(_WIN32)
+__asm__(".section .rdata,\"dr\"\n"
+        ".balign 64\n"
+        ".globl chessai_net_begin\n"
+        "chessai_net_begin:\n"
+        ".incbin \"" EVALFILE "\"\n"
+        ".globl chessai_net_end\n"
+        "chessai_net_end:\n"
+        ".text\n");
+#else
+__asm__(".section .rodata\n"
+        ".balign 64\n"
+        ".globl chessai_net_begin\n"
+        "chessai_net_begin:\n"
+        ".incbin \"" EVALFILE "\"\n"
+        ".globl chessai_net_end\n"
+        "chessai_net_end:\n"
+        ".text\n");
+#endif
+extern "C" const unsigned char chessai_net_begin[];
+extern "C" const unsigned char chessai_net_end[];
+#endif
 
 namespace engine {
 namespace nnue {
@@ -106,6 +137,25 @@ std::unique_ptr<Network> loadNetwork(const std::string& path) {
     auto net = std::make_unique<Network>();
     in.read(reinterpret_cast<char*>(net.get()), NETWORK_BYTES);
     return in ? std::move(net) : nullptr;
+}
+
+std::unique_ptr<Network> networkFromBytes(const unsigned char* data, std::size_t size) {
+    if (data == nullptr || size < static_cast<std::size_t>(NETWORK_BYTES)) return nullptr;
+    auto net = std::make_unique<Network>();
+    std::memcpy(net.get(), data, static_cast<std::size_t>(NETWORK_BYTES));
+    return net;
+}
+
+const Network* embeddedNetwork() {
+#if defined(CHESSAI_HAS_EMBEDDED_NET)
+    // Copied once into an aligned Network on first use (a thread-safe static), then shared
+    // read-only by every search.
+    static const std::unique_ptr<Network> net = networkFromBytes(
+        chessai_net_begin, static_cast<std::size_t>(chessai_net_end - chessai_net_begin));
+    return net.get();
+#else
+    return nullptr;
+#endif
 }
 
 void refresh(const Network& net, const Board& board, Accumulator& out) {

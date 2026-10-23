@@ -1,4 +1,5 @@
 #include "bench.hpp"
+#include "nnue.hpp"
 #include "search.hpp"
 #include "tt.hpp"
 #include "chess.hpp"
@@ -45,7 +46,7 @@ void run(int depth) {
     for (const char* fen : POSITIONS) {
         Board board(fen);
         tt.clear();                       // per-position clear keeps the count deterministic
-        Searcher searcher(state, tt);
+        Searcher searcher(state, tt, Tunables{}, nnue::embeddedNetwork()); // the default eval
         Limits limits;
         limits.depth = depth;
         searcher.think(board, limits, /*printBest=*/false, /*printInfo=*/false);

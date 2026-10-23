@@ -12,6 +12,14 @@ WARN     := -Wall -Wextra -Wno-unused-parameter
 INCLUDE  := -Iinclude -Isrc
 SOURCES  := $(wildcard src/*.cpp)
 
+# NNUE network linked into the binary as the default eval (src/nnue.cpp embeds it with
+# .incbin). OpenBench overrides it with `make EVALFILE=<net>`; the path is made absolute so
+# the assembler finds it. Without the file the build embeds nothing and falls back to the HCE.
+EVALFILE ?= nets/net1.bin
+ifneq ($(wildcard $(EVALFILE)),)
+    DEFS += -DEVALFILE=\"$(abspath $(EVALFILE))\"
+endif
+
 # Unit tests: the doctest binary links every engine source EXCEPT main.cpp (doctest
 # supplies its own main) plus everything under tests/. A lighter opt level (no LTO)
 # keeps the edit-build-test loop and the commit gate fast; correctness is unaffected.

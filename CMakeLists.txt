@@ -43,6 +43,15 @@ target_include_directories(tuner PRIVATE include src)
 add_executable(extract tools/extract.cpp)
 target_include_directories(extract PRIVATE include src)
 
+# --- Embedded NNUE network (the default eval; src/nnue.cpp links it in with .incbin) ---
+set(EVALFILE "${CMAKE_CURRENT_SOURCE_DIR}/nets/net1.bin" CACHE FILEPATH
+    "NNUE network linked into the binary")
+if(EXISTS "${EVALFILE}")
+    target_compile_definitions(chessai PRIVATE EVALFILE="${EVALFILE}")
+    target_compile_definitions(chessai-tests PRIVATE EVALFILE="${EVALFILE}")
+    set_source_files_properties(src/nnue.cpp PROPERTIES OBJECT_DEPENDS "${EVALFILE}")
+endif()
+
 # --- BMI2 PEXT sliding move generation (fast on Zen 3 / modern Intel) ---
 option(USE_PEXT "Use BMI2 PEXT for sliding move generation" ON)
 if(USE_PEXT)

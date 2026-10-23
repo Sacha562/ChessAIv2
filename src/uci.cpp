@@ -31,12 +31,13 @@ public:
     void loop();
 
 private:
-    void handlePosition(std::istringstream& is);
-    void handleGo(std::istringstream& is);
-    void handleSetOption(std::istringstream& is);
-    void stopSearch();
-    void ponderHit();
-    void loadEvalFile(const std::string& path);
+    void                 handlePosition(std::istringstream& is);
+    void                 handleGo(std::istringstream& is);
+    void                 handleSetOption(std::istringstream& is);
+    void                 stopSearch();
+    void                 ponderHit();
+    void                 loadEvalFile(const std::string& path);
+    const nnue::Network* activeNetwork() const;
 
     Board                    board_;
     std::atomic<SearchState> state_{SearchState::Running};
@@ -49,9 +50,9 @@ private:
     int hashMb_  = 16;
     int threads_ = 1; // accepted now, wired to Lazy SMP in Phase 1d.
 
-    // NNUE network from the EvalFile option (none = hand-crafted eval). Replaced only
-    // after stopSearch(), so a running search never sees it change.
-    std::unique_ptr<nnue::Network> net_;
+    // A network loaded from the EvalFile option, overriding the one built into the binary.
+    // Replaced only after stopSearch(), so a running search never sees it change.
+    std::unique_ptr<nnue::Network> fileNet_;
     bool                           useNnue_ = true;
 
     // Self-play-tunable knobs (time management, eval tempo, q-search delta),
@@ -74,15 +75,23 @@ void Engine::ponderHit() {
         state_.notify_all();
 }
 
-// Load (or, for an empty / "<empty>" path, drop) the NNUE network. A file that fails to
-// load leaves the engine on the hand-crafted eval and says so.
+// Load an NNUE network from a file in place of the embedded one; an empty path or
+// "<embedded>" goes back to the embedded network. A file that fails to load also falls
+// back, and says so.
 void Engine::loadEvalFile(const std::string& path) {
     stopSearch(); // no live search may hold the old network
-    net_.reset();
-    if (path.empty() || path == "<empty>") return;
-    net_ = nnue::loadNetwork(path);
-    std::cout << "info string " << (net_ ? "NNUE loaded: " : "NNUE failed to load, using HCE: ")
+    fileNet_.reset();
+    if (path.empty() || path == "<embedded>") return;
+    fileNet_ = nnue::loadNetwork(path);
+    std::cout << "info string "
+              << (fileNet_ ? "NNUE loaded: " : "NNUE failed to load, keeping the embedded net: ")
               << path << std::endl;
+}
+
+// The network searches use: the EvalFile one if loaded, else the embedded one (nullptr in
+// a build without one, which means the hand-crafted eval).
+const nnue::Network* Engine::activeNetwork() const {
+    return fileNet_ ? fileNet_.get() : nnue::embeddedNetwork();
 }
 
 void Engine::handlePosition(std::istringstream& is) {
@@ -142,7 +151,7 @@ void Engine::handleGo(std::istringstream& is) {
                  std::memory_order_relaxed);
     Board                snapshot = board_; // search on a copy
     const Tunables       tp       = tunables_;
-    const nnue::Network* net      = useNnue_ ? net_.get() : nullptr;
+    const nnue::Network* net      = useNnue_ ? activeNetwork() : nullptr;
     searchThread_                 = std::thread([this, snapshot, limits, tp, net]() mutable {
         Searcher searcher(state_, tt_, tp, net);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
@@ -289,7 +298,7 @@ void Engine::loop() {
                       << "id author " << ENGINE_AUTHOR << '\n'
                       << "option name Hash type spin default 16 min 1 max 1048576\n"
                       << "option name Threads type spin default 1 min 1 max 1024\n"
-                      << "option name EvalFile type string default <empty>\n"
+                      << "option name EvalFile type string default <embedded>\n"
                       << "option name UseNNUE type check default true\n"
                       << "option name TimeSoftPermille type spin default 600 min 1 max 100000\n"
                       << "option name TimeHardPermille type spin default 2400 min 1 max 100000\n"

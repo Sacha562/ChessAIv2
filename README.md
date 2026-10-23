@@ -9,7 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.1e (pondering) · next: NNUE
+## Status — v0.1e (pondering) · next: NNUE release
+
+Unreleased on `phase2-datagen`: the first NNUE (`net1`, trained on 100M of the engine's own
+self-play positions) is embedded in the binary and is the default eval — **+252.5 ± 47.1 Elo**
+over the hand-crafted eval (SPRT, 190 games at 10+0.1).
 
 | Release | Phase | Highlights |
 |---|---|---|
@@ -30,15 +34,17 @@ numbers are in [PLAN.md](PLAN.md#project-status).
   futility, futility, late-move pruning, correction history on the static eval.
 - **Move ordering:** TT move → good captures (SEE + MVV-LVA) → killers → countermove
   → butterfly + continuation history → bad captures.
-- **Evaluation:** hand-crafted and tapered (middlegame ↔ endgame): PeSTO-seeded
-  piece-square tables, mobility, pawn structure, bishop pair / rooks / outposts,
-  king safety with pawn shield and storm.
+- **Evaluation:** NNUE by default — a `(768 → 512)×2` SCReLU network embedded in the
+  binary, with incrementally updated accumulators (`EvalFile` loads another net,
+  `UseNNUE false` switches back). The hand-crafted, tapered eval (PeSTO-seeded
+  piece-square tables, mobility, pawn structure, bishop pair / rooks / outposts, king
+  safety with pawn shield and storm) remains as the fallback.
 - **Infrastructure:** bucketed lock-less transposition table, soft/hard time
   management (a forced move is answered at once), pondering (`go ponder` /
   `ponderhit`, full-PV `info` lines, `bestmove … ponder …`), deterministic `bench`,
   `perft` suite.
 - **Not yet:** multi-threading (`Threads` is accepted but ignored), tablebases,
-  MultiPV, NNUE. See the roadmap in [PLAN.md](PLAN.md#part-8--recommended-roadmap-phased).
+  MultiPV. See the roadmap in [PLAN.md](PLAN.md#part-8--recommended-roadmap-phased).
 
 ## Download
 

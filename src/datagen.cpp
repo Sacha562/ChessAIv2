@@ -1,4 +1,5 @@
 #include "datagen.hpp"
+#include "nnue.hpp"
 #include "search.hpp"
 #include "tt.hpp"
 #include "chess.hpp"
@@ -99,10 +100,12 @@ public:
     }
 
 private:
-    // A fresh Searcher per move, exactly as the UCI `go` handler builds one, so the data
-    // reflects the engine as it plays. Emplaced in place: no allocation per move.
+    // A fresh Searcher per move, exactly as the UCI `go` handler builds one (with the
+    // default, embedded network), so the data reflects the engine as it plays. Emplaced in
+    // place; with NNUE its accumulator stack is the one allocation per move, negligible
+    // beside a 5k-node search.
     SearchResult searchPosition(const Board& board) {
-        searcher_.emplace(state_, tt_);
+        searcher_.emplace(state_, tt_, Tunables{}, nnue::embeddedNetwork());
         const Move move =
             searcher_->think(board, limits_, /*printBest=*/false, /*printInfo=*/false);
         return {move, searcher_->score()};

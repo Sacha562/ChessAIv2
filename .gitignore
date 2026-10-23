@@ -16,11 +16,13 @@ chessai
 *.profraw
 *.profdata
 
-# Engine data (kept out of the repo)
-/nets/
+# Engine data (kept out of the repo)...
+/nets/*
 *.nnue
 /syzygy/
 *.bin
+# ...except the NNUE network the build embeds as the default eval
+!/nets/net1.bin
 
 # Match testing (scripts/match.py): built version binaries, opening suites, PGNs
 /bin/

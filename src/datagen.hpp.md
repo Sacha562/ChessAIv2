@@ -2,7 +2,9 @@
 
 Self-play **training-data generation** for the Phase 2 NNUE ([PLAN.md](../PLAN.md) §20,
 "Datagen design"). The `chessai datagen` subcommand runs one independent **worker per
-thread**. Each worker plays HCE self-play games from random openings, searches every
+thread**. Each worker plays self-play games from random openings with the engine's default
+eval (the [embedded NNUE](nnue.hpp.md#embeddednetwork); the first data generation, `run1`,
+was made with the HCE before NNUE existed), searches every
 position with a node-limited [`Searcher`](search.hpp.md#class-searcher), and appends the
 games to its own [viriformat](viriformat.hpp.md) file, which `bullet`'s
 `ViriBinpackLoader` trains on directly. The design choices (format, budget, openings,
@@ -126,8 +128,10 @@ One generator thread's private state, heap-allocated (it embeds a multi-megabyte
 **One Searcher per move.** `searchPosition` emplaces a fresh
 [`Searcher`](search.hpp.md#class-searcher) (cleared history and correction history) for
 every move, exactly as the UCI `go` handler does, so the data reflects the engine as it
-plays; only the TT carries over between the moves of one game. `std::optional::emplace`
-rebuilds it in place, without an allocation per move. It runs
+plays; only the TT carries over between the moves of one game. It gets the default,
+[embedded network](nnue.hpp.md#embeddednetwork) (nullptr, the HCE, in a build without one).
+`std::optional::emplace` rebuilds it in place; with NNUE its ~258 KB accumulator stack is the
+one allocation per move, negligible beside a 5k-node search. It runs
 [`think`](search.hpp.md#searcherthink) silently (`printBest=false, printInfo=false`) and
 reads [`score`](search.hpp.md#searcherscore).
 
