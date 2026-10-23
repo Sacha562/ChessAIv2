@@ -108,3 +108,35 @@ TEST_CASE("an eager ProbCut still wins the hanging piece") {
     CHECK(bestMove(HANGING_QUEEN, 8, eager) == "e4d5");
     CHECK(bestMove(FREE_KNIGHT, 8, eager) == "e4d5");
 }
+
+TEST_CASE("a soft node budget finishes the iteration that crosses it") {
+    // Datagen's per-move budget: the search must spend at least the soft budget, stop
+    // at an iteration boundary, and never touch the (much larger) hard cap.
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Searcher                 searcher(state, tt);
+
+    Limits limits;
+    limits.softNodes = 5000;
+    limits.nodes     = 1'000'000;
+    searcher.think(Board(), limits, /*printBest=*/false, /*printInfo=*/false);
+    CHECK(searcher.nodes() >= 5000);
+    CHECK(searcher.nodes() < 1'000'000);
+}
+
+TEST_CASE("score reports the last completed iteration") {
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Searcher                 searcher(state, tt);
+
+    Limits limits;
+    limits.depth = 4;
+    searcher.think(Board(BACK_RANK_MATE), limits, /*printBest=*/false, /*printInfo=*/false);
+    CHECK(searcher.score() == mate_in(1));
+
+    searcher.think(Board(HANGING_QUEEN), limits, /*printBest=*/false, /*printInfo=*/false);
+    // exd5 leaves a lone pawn against a bare king: a clearly positive, non-mate score
+    // (and proof the mate score of the previous search was replaced).
+    CHECK(searcher.score() > 0);
+    CHECK_FALSE(is_mate(searcher.score()));
+}

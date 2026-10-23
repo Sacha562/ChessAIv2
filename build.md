@@ -52,7 +52,9 @@ planned (PLAN.md Phase 3); not yet wired in.
 
 Development targets **WSL2 (Ubuntu)** — Windows Smart App Control blocks running
 unsigned self-built `.exe`s, and the Linux toolchain (clang/gcc + OpenBench,
-fastchess, and later the `bullet` NNUE trainer) is the standard for engine work. The
+fastchess) is the standard for engine work. (The `bullet` NNUE trainer is the exception:
+it runs natively on Windows against the AMD HIP SDK, with Smart App Control turned off —
+see [PLAN.md](PLAN.md) §20.) The
 canonical source lives on Windows and is synced into the Linux filesystem to build at
 native speed (building on `/mnt/c` is slow). Full commands are in
 [README.md](README.md); in brief:
@@ -82,10 +84,28 @@ unsigned binary — hence WSL2 for actually executing it.
 ./chessai                -> UCI loop (default)
 ./chessai bench [depth]  -> deterministic benchmark (OpenBench signature)
 ./chessai perft test     -> move-generation correctness suite (exit 1 on failure)
+./chessai datagen <out-prefix> <threads> <positions> [seed] [soft-nodes]
+                         -> self-play NNUE training data (see NNUE data generation)
 ```
 
 See [main.cpp.md](src/main.cpp.md) for dispatch and [README.md](README.md) for the
 full command list.
+
+## NNUE data generation
+
+`chessai datagen` ([datagen.hpp.md](src/datagen.hpp.md)) is built into the engine, so
+there is no extra target: it compiles with the same flags as `chessai` (the Makefile and
+CMake both glob `src/*.cpp`). Run it in WSL2 like the engine, writing straight to the
+Windows drive, where the native-Windows `bullet` trainer reads it
+([PLAN.md](PLAN.md) §20). Generation writes only ~20 KB/s per run, so `/mnt/c` speed does
+not matter:
+
+```bash
+./chessai datagen /mnt/c/Users/sivuc/nnue-data/run1 22 300000000   # ~15 h at ~5.4k pos/s
+```
+
+Each thread appends to `<prefix>-<i>.vf` ([viriformat](src/viriformat.hpp.md)). Files can
+be joined with `cat` and loaded with bullet's `ViriBinpackLoader`.
 
 ## Release builds
 

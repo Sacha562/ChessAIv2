@@ -431,13 +431,13 @@ The modern "`(768 → N) × 2`" perspective network.
 
 **→ My recommendation: bullet + HCE self-play data (start ~300–600M positions, scale toward billions for "maximal") + GPU training, iterated.** This is a first-class deliverable, not an afterthought — budget for the data-gen and SIMD-kernel work explicitly.
 
-**⚠️ AMD-GPU training reality (your RX 6800 XT — gfx1030 / RDNA2):** First, the reassuring part — this only affects *training*. **NNUE inference inside the engine runs on the CPU's AVX2/AVX-512**, so your GPU does **not** limit the engine's playing strength in any way. For *training*, the mainstream chess trainer `bullet` is CUDA-first and AMD support is not first-class. gfx1030 *is* in AMD's ROCm compatibility matrix, but on **Linux**, not cleanly on **Windows/WSL2** (WSL2 + ROCm on RX 6800 is currently flaky — documented `rocminfo`/`HSA_STATUS_ERROR_OUT_OF_RESOURCES` failures). Practical paths, best-first for a maximal target:
-- **Rent a cloud NVIDIA GPU** (vast.ai / RunPod / Lambda) for training runs and use mainline `bullet` (CUDA). Training is intermittent and cheap per-run; least-friction, best-supported toolchain. *My default.*
-- **Native Linux (dual-boot) + ROCm + `nnue-pytorch`** — gfx1030 has solid Linux ROCm support; uses your own GPU, no cloud cost, heavier setup.
-- **`bullet` CPU backend on Windows** — zero GPU setup; fine for small nets, too slow for maximal-scale data.
-- **WSL2 + ROCm** — possible but currently fights you; revisit once AMD's WSL path for gfx1030 stabilizes.
+**✅ AMD-GPU training — resolved (2026-10-23): native Windows + HIP SDK 6.4.2 + `bullet --features rocm`.** This only affects *training*; **NNUE inference inside the engine runs on the CPU's AVX2/AVX-512**, so the GPU does not limit playing strength. `bullet` now ships a first-class `rocm` backend (kernels runtime-compiled via hiprtc). Verified on the RX 6800 XT (gfx1030): bullet's `test1` reproduces its expected loss `0.056420` exactly, and a `(768→1024)×2→1` SCReLU net trains at **~1.78M pos/s** (≈40 min for a standard 40×100M-position schedule, before data-loader overhead). Setup notes:
+- **HIP SDK 6.4.2, not 7.x** — AMD's 7.1.1/7.2 Windows SDKs mark RDNA2/gfx1030 unsupported; 6.4.2 marks it ✅. Skip the bundled PRO display driver (Adrenalin already ships the HIP 6 runtime).
+- Build env: `HIP_PATH` (set by the installer), `GCN_ARCH_NAME=gfx1030`, and `…\ROCm\6.4\bin` on `PATH` at run time.
+- **Windows Smart App Control must be off** — it blocks every locally compiled unsigned executable (cargo build scripts and the trainer itself, `os error 4551`).
+- **WSL2 + ROCm is a dead end** for this card: AMD's WSL ROCm covers RDNA3/4 + Strix only. Fallbacks if Windows breaks: dual-boot Linux + ROCm 7 (gfx1030 supported), or a rented NVIDIA GPU with bullet `cuda`.
 
-This is a Phase-2 decision (months out); we finalize it then. Nothing here blocks Phase 1.
+**✅ Datagen design (chosen 2026-10-23):** a `chessai datagen` subcommand that plays HCE self-play games and writes **viriformat** (whole games: 32-byte packed start board + `u16 move, i16 score` per ply + a 4-byte terminator; position filters are applied at train time by bullet's `ViriBinpackLoader`). Labels: **5k soft nodes** per move (finish the iteration that crosses 5k; hard cap as a safety net), the searched score plus the game WDL. Openings: **8–9 random legal plies** from startpos, rejected if a quick search scores the start beyond ~1000 cp. Adjudication: **win** at |score| ≥ 2500 for 4 consecutive plies; **draw** after ply 80 at |score| ≤ 10 for 10 consecutive plies. Threading: one independent worker per thread (own `Searcher` + TT + RNG seed), one output file per thread (viriformat files concatenate). **Built** ([src/datagen.hpp.md](src/datagen.hpp.md), [src/viriformat.hpp.md](src/viriformat.hpp.md)) and verified: a 22-thread smoke run measured **~5.4k positions/s** (300M ≈ 15 h). 203,590 positions decode with the `viriformat` crate with every move legal, the final eval sign matches the result in 1115/1115 decisive games, and bullet trains on them through `ViriBinpackLoader`.
 
 ---
 
@@ -584,7 +584,7 @@ Lazy SMP (`Threads`); Syzygy 3–4–5 via Fathom (`SyzygyPath`); stability-base
 
 **Phase 2 — NNUE (1–3 months)** ⏳ *next*
 Incremental accumulator on make/unmake; AVX2 kernels; self-play data generation from the HCE engine (~300–600M positions); train a `768→512/1024×2` SCReLU net with 8 buckets via **bullet**; swap eval to NNUE with a minimal HCE fallback; iterate (bigger nets, HalfKA, more data, AVX-512). *Deliverable: a master-class engine (~3000–3400+).*
-*Open question before starting:* the trainer. `bullet` is CUDA-first and the GPU here is an AMD RX 6800 XT (see §20). Check `bullet`'s current AMD support, else use native-Linux ROCm + `nnue-pytorch`, a rented NVIDIA GPU, or CPU training for a small first net (768→128/256).
+*Trainer resolved (2026-10-23):* `bullet` with its `rocm` backend on native Windows + HIP SDK 6.4.2 trains on the local RX 6800 XT (~1.78M pos/s at 768→1024; see §20). The self-play generator `chessai datagen` (viriformat) is built and verified against bullet (§20). Next: generate the first ~100M+ positions and train a first net.
 
 **Phase 3 — Ongoing (optional)**
 Bigger nets, PGO release binaries (ISA-variant binaries ✅ since v0.1b), 6-man tablebases, OpenBench-driven parameter tuning, pondering (✅ *v0.1e*: `go ponder` / `ponderhit` + full-PV `info` lines), Chess960.

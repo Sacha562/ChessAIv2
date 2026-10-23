@@ -1,8 +1,9 @@
 # Test: `test_search.cpp`
 
 Functional tests for the **Phase 1c main-search extensions** —
-[singular extensions](../src/search.hpp.md#searchersearch) — and the **Phase 1d whole-node
-forward pruning** (razoring, ProbCut), exercised through the public
+[singular extensions](../src/search.hpp.md#searchersearch) — the **Phase 1d whole-node
+forward pruning** (razoring, ProbCut), and the **Phase 2 datagen hooks** (the soft node
+budget and the root-score getter), exercised through the public
 [`Searcher`](../src/search.hpp.md#class-searcher). Singular extensions change how the
 search *allocates depth*, not the result on a clear tactic, so there is no table to assert
 against directly; the suite validates them behaviourally instead:
@@ -88,3 +89,18 @@ With `ProbCutMinDepth = 3` and `ProbCutMargin = 50` the shallow capture search r
 constantly; the forced capture must still be the move played — a guard on the SEE
 threshold, the q-search screen, the reduced-depth verification, and the `BOUND_LOWER`
 store that follows a successful cut.
+
+### `a soft node budget finishes the iteration that crosses it`
+
+The Phase 2 [datagen](../src/datagen.hpp.md) budget: a startpos search with
+[`Limits::softNodes`](../src/search.hpp.md#struct-limits) `= 5000` and a hard `nodes` cap
+of 1,000,000 must spend **at least** the soft budget (it stops only at an iteration
+boundary, never before) and stay far below the hard cap (the soft stop, not the hard
+abort, ends it).
+
+### `score reports the last completed iteration`
+
+[`Searcher::score`](../src/search.hpp.md#searcherscore) after a depth-4 search of the
+back-rank mate is exactly `mate_in(1)`. Searching the hanging-queen position next with the
+**same** `Searcher` gives a positive non-mate score (`exd5` leaves a lone pawn against a
+bare king), proving the previous search's score is replaced rather than carried over.

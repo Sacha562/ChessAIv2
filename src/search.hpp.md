@@ -91,22 +91,24 @@ other data, and thread start/join supply the ordering around a search.
 
 ### `struct Limits`
 
-Everything a UCI `go` command can specify. Populated by
-[`Engine::handleGo`](uci.hpp.md#enginehandlego) and consumed by
-[`Searcher::think`](#searcherthink).
+Everything a UCI `go` command can specify, plus the soft node budget that
+[datagen](datagen.hpp.md) uses. Populated by
+[`Engine::handleGo`](uci.hpp.md#enginehandlego) (and by the datagen workers) and consumed
+by [`Searcher::think`](#searcherthink).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `depth` | `int` | Fixed depth cap in plies; `0` = no depth cap. |
 | `movetime` | `int64_t` | Exact ms to spend on this move; `0` = none. |
-| `nodes` | `int64_t` | Node cap; `0` = none. |
+| `nodes` | `int64_t` | **Hard** node cap: the search aborts mid-iteration once it is reached (the aborted iteration is discarded); `0` = none. |
+| `softNodes` | `int64_t` | **Soft** node budget: no new iterative-deepening iteration is started once this many nodes have been spent, so the move always comes from a completed depth; `0` = none. Not settable through UCI `go`; [datagen](datagen.hpp.md#struct-datagenconfig) sets it (with `nodes` as a safety cap). Like `nodes`, it makes the search untimed. |
 | `wtime` / `btime` | `int64_t` | Ms remaining on White's / Black's clock. |
 | `winc` / `binc` | `int64_t` | Increment (ms) per move for White / Black. |
 | `movestogo` | `int` | Moves until the next time control; `0` = sudden death (a default of 30 is assumed). |
 | `infinite` | `bool` | Search until an explicit `stop`: `bestmove` is withheld until then, even after a forced mate is found. |
 | `ponder` | `bool` | `go ponder`: the search starts in ponder mode (clock stopped, `bestmove` withheld until `ponderhit` or `stop`). The clock fields are the ones to use from the `ponderhit` on. |
 
-**Used by:** [`Searcher::think`](#searcherthink), [bench](bench.hpp.md#run)
+**Used by:** [`Searcher::think`](#searcherthink), [bench](bench.hpp.md#run), [datagen](datagen.hpp.md#class-worker-internal)
 
 ### `struct Tunables`
 
@@ -282,10 +284,11 @@ just want the defaults).
 | `pondering_` | `bool` | Still in ponder mode (no `ponderhit` seen yet): every clock check is skipped. Starts as [`Limits::ponder`](#struct-limits); cleared by [`syncPonder`](#searchersyncponder). |
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
+| `rootScore_` | `Value` | Score of the last **completed** iteration (side-to-move cp; `VALUE_ZERO` until one completes). Read through [`score`](#searcherscore). |
 
-**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
+**Methods:** [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
 
-**Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md)
+**Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md), [datagen](datagen.hpp.md)
 
 ## Functions
 
@@ -328,7 +331,9 @@ end. With `printBest`, probes the TT once more for the ponder reply.
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
 stands). Soft stop: once [`clockMs`](#searcherclockms) reaches
 [`softLimitMs_`](#class-searcher) no new depth is started; the current depth may still
-run until the hard limit. While pondering, neither limit applies — the search keeps
+run until the hard limit. A [`softNodes`](#struct-limits) budget works the same way in
+nodes: the iteration that crosses it completes, then the loop stops (checked right after
+the iteration is recorded, before the clock's soft check). While pondering, neither limit applies — the search keeps
 deepening until the `ponderhit`; [`syncPonder`](#searchersyncponder) runs before the
 soft check so a hit is seen at the iteration boundary too. The root
 depth is clamped to `MAX_PLY - 1` even when `go depth N` requests a larger `N`, so the
@@ -376,6 +381,14 @@ finds one, then flush. Called by [`think`](#searcherthink) when `printBest`.
 
 Return `uint64_t` — nodes visited in the current/last search. Read by
 [bench](bench.hpp.md#run) to accumulate the benchmark node total. Trivial getter.
+
+### `Searcher::score`
+
+Return [`Value`](types.hpp.md#using-value--int) — the score of the last **completed**
+iteration of the last [`think`](#searcherthink), in centipawns from the side to move's
+point of view (a mate score when a mate was found). `VALUE_ZERO` when no iteration
+completed (no legal moves). [datagen](datagen.hpp.md#class-worker-internal) records it
+as each position's training label. Trivial getter.
 
 ### `Searcher::search` (private)
 
@@ -724,7 +737,7 @@ from the [`Limits`](#struct-limits), the side to move, and [`tp_`](#struct-tunab
 Called once at the top of [`think`](#searcherthink).
 
 - **`movetime`**: soft = hard = `movetime − MOVE_OVERHEAD_MS` (spend it exactly).
-- **depth / nodes / infinite**: no clock (`useTime_` stays false; runs untimed).
+- **depth / nodes / softNodes / infinite**: no clock (`useTime_` stays false; runs untimed).
 - **clock (`wtime`/`btime`…)**: `base = remaining/movestogo + inc/2` (movestogo
   defaults to `tp_.assumedMovestogo`), then soft/hard scale off `base` by permille.
   The hard limit is capped at half the remaining clock (minus overhead) so the

@@ -22,9 +22,10 @@ enum class SearchState : uint8_t {
 
 // Everything the UCI `go` command can specify.
 struct Limits {
-    int     depth    = 0;                             // fixed depth (0 = no depth cap)
-    int64_t movetime = 0;                             // exact ms for this move (0 = none)
-    int64_t nodes    = 0;                             // node cap (0 = none)
+    int     depth     = 0; // fixed depth (0 = no depth cap)
+    int64_t movetime  = 0; // exact ms for this move (0 = none)
+    int64_t nodes     = 0; // node cap (0 = none)
+    int64_t softNodes = 0; // no new iteration once this many nodes are spent (0 = none)
     int64_t wtime = 0, btime = 0, winc = 0, binc = 0; // ms on the clocks
     int     movestogo = 0;
     bool    infinite  = false;
@@ -159,6 +160,9 @@ public:
 
     uint64_t nodes() const { return nodes_; }
 
+    // Score (side-to-move cp) of the last completed iteration of the last `think`.
+    Value score() const { return rootScore_; }
+
 private:
     Value search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
                  Move excluded = Move(Move::NO_MOVE));
@@ -226,8 +230,9 @@ private:
     bool    timeUp_           = false;
     bool    pondering_        = false; // no ponderhit yet: the clock does not run
 
-    Move rootBest_          = Move(Move::NO_MOVE); // best of the in-progress iteration
-    Move rootBestCompleted_ = Move(Move::NO_MOVE); // best of the last completed iteration
+    Move  rootBest_          = Move(Move::NO_MOVE); // best of the in-progress iteration
+    Move  rootBestCompleted_ = Move(Move::NO_MOVE); // best of the last completed iteration
+    Value rootScore_         = VALUE_ZERO;          // score of the last completed iteration
 };
 
 } // namespace engine

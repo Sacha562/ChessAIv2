@@ -187,7 +187,7 @@ void Searcher::setupTiming(const Limits& limits, const Board& board) {
     }
 
     // A depth/node/infinite search has no clock budget.
-    if (limits.infinite || limits.depth > 0 || limits.nodes > 0) return;
+    if (limits.infinite || limits.depth > 0 || limits.nodes > 0 || limits.softNodes > 0) return;
 
     const bool    white     = (board.sideToMove() == Color::WHITE);
     const int64_t remaining = white ? limits.wtime : limits.btime;
@@ -722,6 +722,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);
+    rootScore_         = VALUE_ZERO;
     rootPvLength_      = 0;
     pondering_         = limits.ponder;
     ponderDiscountMs_  = 0;
@@ -764,10 +765,15 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
         if (timeUp_) break; // incomplete iteration: keep previous best
 
         score              = v;
+        rootScore_         = v;
         rootBestCompleted_ = rootBest_;
         saveRootPv();
 
         if (printInfo) reportIteration(depth, score);
+
+        // Soft node budget (datagen): like the soft clock, finish the iteration that
+        // crossed it rather than abort mid-search, so the move comes from a full depth.
+        if (limits.softNodes > 0 && nodes_ >= static_cast<uint64_t>(limits.softNodes)) break;
 
         // Soft stop: past the soft budget, a new (more expensive) depth won't
         // finish in time, so stop now and keep this iteration's move. While pondering
