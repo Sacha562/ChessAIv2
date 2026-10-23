@@ -9,15 +9,12 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.1e (pondering) · next: NNUE release
-
-Unreleased on `phase2-datagen`: the first NNUE (`net1`, trained on 100M of the engine's own
-self-play positions) is embedded in the binary and is the default eval — **+252.5 ± 47.1 Elo**
-over the hand-crafted eval (SPRT, 190 games at 10+0.1).
+## Status — v0.2 (NNUE) · next: generation-2 data, bigger nets
 
 | Release | Phase | Highlights |
 |---|---|---|
-| [v0.1e](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.1e) | 3 — pondering | `go ponder` / `ponderhit` with full-PV `bestmove … ponder …` (**+131 Elo** vs ponder off), instant reply to a forced move |
+| [v0.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.2) | 2 — NNUE | First NNUE (`(768→512)×2` SCReLU, trained on 100M of its own self-play positions) embedded and made the default eval: **+252.5 Elo** vs the hand-crafted eval; `datagen` self-play generator |
+| v0.1e | 3 — pondering | `go ponder` / `ponderhit` with full-PV `bestmove … ponder …` (**+131 Elo** vs ponder off), instant reply to a forced move |
 | v0.1d | 1d — search selectivity | Correction history + history-modulated LMR (**+32.5 Elo** vs v0.1c), SPSA re-tune (**+6.1** at LTC) |
 | v0.1c | 1c — hand-crafted eval | PSQT + tapered eval, mobility, pawn structure, piece terms, king safety, singular extensions |
 | v0.1b | 1b — ordering & pruning | Killers/history/countermove, NMP, LMR, RFP, futility, LMP, aspiration (**+545** vs v0.1a) |
@@ -117,6 +114,7 @@ From Git Bash on Windows the hook re-runs the checks inside WSL automatically.
 ./chessai              # UCI mode (point a GUI / cutechess / fastchess at this binary)
 ./chessai bench [d]    # deterministic benchmark (OpenBench signature); optional depth
 ./chessai perft test   # move-generation correctness suite
+./chessai datagen <out-prefix> <threads> <positions> [seed] [soft-nodes]   # NNUE training data
 
 # Interactive UCI
 uci
@@ -132,6 +130,7 @@ quit
 | Group | Options |
 |---|---|
 | General | `Hash` (MB, default 16), `Threads` (accepted, not used yet), `Ponder` (default off; the GUI enables it) |
+| Evaluation | `EvalFile` (default `<embedded>`: the network built into the binary; a path loads another bullet `quantised.bin`), `UseNNUE` (default true; false = hand-crafted eval) |
 | Time | `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille` (share of ponder time not charged to the clock after a `ponderhit`, default 500) |
 | Feature toggles (0/1) | `UseKillers`, `UseHistory`, `UseCountermove`, `UseContHist`, `UseIIR`, `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`, `UseCheckExt`, `UseSingular`, `UseAspiration`, `UseHistLmr`, `UseCorrHist` (all on); `UseHistPrune`, `UseCapHist`, `UseRazoring`, `UseProbCut` (off) |
 | Tunable margins | `LmrBase`, `LmrDivisor`, `NmpBase`, `NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `LmpBase`, `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, `HistPruneMargin`, `HistLmrDiv`, `RazorBase`, `RazorMargin`, `ProbCutMinDepth`, `ProbCutMargin`, `AspirationDelta`, `Tempo`, `DeltaMargin`, `EndgamePieces` |
@@ -220,7 +219,11 @@ src/movepick.*          staged move ordering
 src/history.*           killers, butterfly / continuation / capture history, countermoves
 src/corrhist.*          correction history for the static eval
 src/see.*               static exchange evaluation
-src/eval.*              hand-crafted tapered evaluation (EvalParams)
+src/nnue.*              NNUE evaluation: embedded net, incremental accumulators
+src/eval.*              hand-crafted tapered evaluation (EvalParams), the fallback
+src/datagen.*           self-play training-data generator (chessai datagen)
+src/viriformat.*        viriformat game encoder for the bullet trainer
+nets/net1.bin           default NNUE network, embedded at build time
 src/tt.*                transposition table (bucketed, aged, lock-less)
 src/uci.*               UCI command loop and options
 src/perft.*             perft + correctness suite

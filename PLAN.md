@@ -1,6 +1,6 @@
 # High-Performance Chess AI in C++ — Component Plan & Decision Document
 
-**Status (2026-10-21):** Phases 0 → 1d are **done**; the latest release is **v0.1e** (`8014680`), which adds pondering ahead of NNUE. **Next: Phase 2 (NNUE).** See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
+**Status (2026-10-23):** Phases 0 → 1d are **done** and **Phase 2 (NNUE) has shipped its first net**: the latest release is **v0.2** (`80da9be`), whose embedded NNUE is the default eval (+252.5 Elo over the HCE). **Next: Phase 2 iteration** (generation-2 data, output buckets, wider nets). See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
 **Meta-direction (locked 2026-07-02):** **top-tier / maximal** ambition, **Clang** builds, **"you choose, I build."** The recommended defaults were accepted wholesale; the per-component analysis below is kept as the design record.
 **Board/move-gen foundation:** [Disservin `chess-library`](https://github.com/Disservin/chess-library) (already chosen).
 **Primary research source:** [Chess Programming Wiki](https://www.chessprogramming.org) (CPW), cross-checked with Stockfish/OpenBench docs and the modern engine-dev ecosystem.
@@ -22,6 +22,7 @@ Every gain below is from self-play SPRT/A-B tests (fastchess, UHO opening book, 
 | v0.1c | `bea41e6` | 1c — hand-crafted eval | PeSTO-seeded PSQT + tapered eval, mobility, pawn structure, piece terms, king safety + pawn shield/storm; singular extensions, continuation history; Texel tuner | PSQT **+451**, mobility **+58**, pawns + pieces **+25**, king safety **+13**, shield **+6**, storm **+4**, singular **+24**, cont-hist **+7**, search re-tune **+26** (LTC) |
 | v0.1d | `f5ef9d5` | 1d — search selectivity | Correction history, history-modulated LMR, re-tuned LMR curve + eval-gated margins | Corrhist + history-LMR **+32.5** vs v0.1c; re-tune **+6.1** (LTC) |
 | v0.1e | `8014680` | 3 — pondering (pulled forward) | `go ponder` / `ponderhit`, triangular PV table (full-PV `info`, `bestmove … ponder …`), `PonderCreditPermille`; forced moves under a clock searched only to depth 4 | Ponder on vs off **+130.9 ± 42.4** (10+0.1, python-chess runner); credit 0 / 1000 vs 500 **−3.4 / +3.7** (neutral, kept 500) |
+| v0.2 | `80da9be` | 2 — NNUE (first net) | `chessai datagen` (viriformat self-play generator); NNUE inference with incremental accumulators; net1 `(768→512)×2` SCReLU trained by bullet on 100M HCE self-play positions, embedded with `.incbin`; `EvalFile` / `UseNNUE` options; bench 46577 | NNUE vs HCE **+252.5 ± 47.1** (190 games, SPRT `[0, 10]` accepted) |
 
 Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/releases).
 
@@ -36,6 +37,8 @@ Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/
 - **OpenBench is self-hosted in WSL** and used for SPSA tuning only; SPRT tests run locally with fastchess (§29).
 - **Pondering shipped before NNUE.** A Phase 3 item, pulled forward for the Lichess bot. fastchess cannot ponder, so its SPRTs ran through a python-chess runner using the same `ponderhit` path as lichess-bot.
 - **`Threads` is accepted but ignored**: search is single-threaded until Lazy SMP lands.
+- **NNUE trains on the local AMD GPU**, not a rented NVIDIA one: bullet's `rocm` backend on native Windows + HIP SDK 6.4.2 (§20). Smart App Control had to be turned off, so Windows can now run self-built binaries too.
+- **The first net is small and bucket-free** (`(768→512)×2`, no output buckets, 100M positions instead of 300–600M) to prove the pipeline end to end; inference is auto-vectorised C++, not hand-written AVX2 kernels, since it already runs at ~95% of HCE speed. Output buckets, more data and wider nets are the next iterations.
 
 ---
 
@@ -582,7 +585,7 @@ Correction history, history-modulated LMR, history pruning, capture history, raz
 **Phase 1e — Infrastructure polish (days)** ⏳ *originally Phase 1d*
 Lazy SMP (`Threads`); Syzygy 3–4–5 via Fathom (`SyzygyPath`); stability-based time management; MultiPV; optional Polyglot book; pawn hash. *Deliverable: a complete, multi-threaded, tablebase-aware engine.* Can run before or after Phase 2: Lazy SMP adds nothing at the 1-thread conditions used for testing, so it mainly matters for real play.
 
-**Phase 2 — NNUE (1–3 months)** ⏳ *next*
+**Phase 2 — NNUE (1–3 months)** ⏳ *first net shipped in v0.2; iterating*
 Incremental accumulator on make/unmake; AVX2 kernels; self-play data generation from the HCE engine (~300–600M positions); train a `768→512/1024×2` SCReLU net with 8 buckets via **bullet**; swap eval to NNUE with a minimal HCE fallback; iterate (bigger nets, HalfKA, more data, AVX-512). *Deliverable: a master-class engine (~3000–3400+).*
 *Trainer resolved (2026-10-23):* `bullet` with its `rocm` backend on native Windows + HIP SDK 6.4.2 trains on the local RX 6800 XT (~1.78M pos/s at 768→1024; see §20). The self-play generator `chessai datagen` (viriformat) is built and verified against bullet (§20). **First net (2026-10-23):** 100M HCE self-play positions → net1, `(768→512)×2` SCReLU (40 superbatches, 19 min on the RX 6800 XT); engine inference in `src/nnue.*` (incremental accumulators, auto-vectorised, 3.05M nps vs 3.24M HCE). **NNUE vs HCE: +252.5 ± 47.1 Elo** (190 games @ 10+0.1, SPRT `[0, 10]` accepted). **net1 is now embedded and the default eval** (`nets/net1.bin`, linked with `.incbin` via the `EVALFILE` build variable; bench, OpenBench, datagen and releases all use it; **new bench signature 46577**). Next: generation-2 data from the NNUE engine, output buckets and a wider net.
 
