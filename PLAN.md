@@ -1,6 +1,6 @@
 # High-Performance Chess AI in C++ — Component Plan & Decision Document
 
-**Status (2026-10-23):** Phases 0 → 1d are **done** and **Phase 2 (NNUE) has shipped its first net**: the latest release is **v0.2** (`80da9be`), whose embedded NNUE is the default eval (+252.5 Elo over the HCE). **Next: Phase 2 iteration** (generation-2 data, output buckets, wider nets). See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
+**Status (2026-10-26):** Phases 0 → 1d are **done** and **Phase 2 (NNUE) has shipped its first net**: the latest release is **v0.2.1** (`e6d6600`) — v0.2's embedded NNUE (+252.5 Elo over the HCE) plus an extension-budget fix for checking endgames (+8.5). **Next: Phase 2 iteration** (generation-2 data, output buckets, wider nets). See [Project status](#project-status) for what shipped, what was measured, and where the build departed from this plan.
 **Meta-direction (locked 2026-07-02):** **top-tier / maximal** ambition, **Clang** builds, **"you choose, I build."** The recommended defaults were accepted wholesale; the per-component analysis below is kept as the design record.
 **Board/move-gen foundation:** [Disservin `chess-library`](https://github.com/Disservin/chess-library) (already chosen).
 **Primary research source:** [Chess Programming Wiki](https://www.chessprogramming.org) (CPW), cross-checked with Stockfish/OpenBench docs and the modern engine-dev ecosystem.
@@ -23,6 +23,7 @@ Every gain below is from self-play SPRT/A-B tests (fastchess, UHO opening book, 
 | v0.1d | `f5ef9d5` | 1d — search selectivity | Correction history, history-modulated LMR, re-tuned LMR curve + eval-gated margins | Corrhist + history-LMR **+32.5** vs v0.1c; re-tune **+6.1** (LTC) |
 | v0.1e | `8014680` | 3 — pondering (pulled forward) | `go ponder` / `ponderhit`, triangular PV table (full-PV `info`, `bestmove … ponder …`), `PonderCreditPermille`; forced moves under a clock searched only to depth 4 | Ponder on vs off **+130.9 ± 42.4** (10+0.1, python-chess runner); credit 0 / 1000 vs 500 **−3.4 / +3.7** (neutral, kept 500) |
 | v0.2 | `80da9be` | 2 — NNUE (first net) | `chessai datagen` (viriformat self-play generator); NNUE inference with incremental accumulators; net1 `(768→512)×2` SCReLU trained by bullet on 100M HCE self-play positions, embedded with `.incbin`; `EvalFile` / `UseNNUE` options; bench 46577 | NNUE vs HCE **+252.5 ± 47.1** (190 games, SPRT `[0, 10]` accepted) |
+| v0.2.1 | `e6d6600` | 2 — fix | Extension budget: extend (singular or check) only while `ply < 2 × rootDepth`, and a check extension no longer stacks on a singular one. Fixes queen endgames where a never-shrinking checking line stalled iterations (KQvK: depth 10 → 19, 0/8 → 7/8 mated); bench unchanged | vs v0.2 **+8.5 ± 3.8** (12212 games, SPRT `[-1.75, 0.25]` accepted) |
 
 Release binaries are on [GitHub releases](https://github.com/Sacha562/ChessAIv2/releases).
 

@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.2 (NNUE) · next: generation-2 data, bigger nets
+## Status — v0.2.1 (NNUE) · next: generation-2 data, bigger nets
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.2.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.2.1) | 2 — fix | Extension budget: check/singular extensions no longer stack and stop past ply 2×depth, so long checking lines (queen endgames) finish iterations and mate instead of shuffling (KQvK 0/8 → 7/8 mated); **+8.5 Elo** vs v0.2 |
 | [v0.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.2) | 2 — NNUE | First NNUE (`(768→512)×2` SCReLU, trained on 100M of its own self-play positions) embedded and made the default eval: **+252.5 Elo** vs the hand-crafted eval; `datagen` self-play generator |
 | v0.1e | 3 — pondering | `go ponder` / `ponderhit` with full-PV `bestmove … ponder …` (**+131 Elo** vs ponder off), instant reply to a forced move |
 | v0.1d | 1d — search selectivity | Correction history + history-modulated LMR (**+32.5 Elo** vs v0.1c), SPSA re-tune (**+6.1** at LTC) |
