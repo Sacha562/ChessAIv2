@@ -242,6 +242,7 @@ private:
     int64_t nodeLimit_        = 0; // 0 = none
     int64_t ponderDiscountMs_ = 0; // ponder time not charged to the budget (see clockMs)
     int64_t iterationStartMs_ = 0; // elapsedMs() when the current iteration began
+    int     rootDepth_        = 0; // depth of the current iteration (bounds extensions)
     bool    useTime_          = false;
     bool    timeUp_           = false;
     bool    pondering_        = false; // no ponderhit yet: the clock does not run

@@ -57,7 +57,8 @@ a [transposition table](tt.hpp.md).
   `NMP_DIV` / `NMP_EVAL_MAX`, `RFP_MAX_DEPTH`, `FUT_MAX_DEPTH`, `LMP_MAX_DEPTH`,
   `LMR_MIN_DEPTH` / `LMR_MIN_MOVES`, `ASPIRATION_MIN_DEPTH`, `SINGULAR_TT_DEPTH_MARGIN`
   (how much shallower than the node the TT entry may be to seed a singular verification),
-  `HIST_PRUNE_MAX_DEPTH` (depth gate for history pruning), `HIST_LMR_MAX_PLIES` (cap on
+  `EXTENSION_PLY_FACTOR` (a node may extend only while `ply < EXTENSION_PLY_FACTOR ·
+  rootDepth_`; see [the extension budget](#searchersearch)), `HIST_PRUNE_MAX_DEPTH` (depth gate for history pruning), `HIST_LMR_MAX_PLIES` (cap on
   the history-driven LMR adjustment), `RAZOR_MAX_DEPTH`, and the ProbCut trio
   `PROBCUT_REDUCTION` / `PROBCUT_TT_DEPTH_MARGIN` / `PROBCUT_MIN_SEE_THRESHOLD` (a
   `static_assert` pins `PROBCUT_TT_DEPTH_MARGIN > SINGULAR_TT_DEPTH_MARGIN`) —
@@ -284,6 +285,7 @@ pointer: with a network the static eval is NNUE, without one (the default, and w
 | `nodeLimit_` | `int64_t` | Node cap; `0` = none. |
 | `ponderDiscountMs_` | `int64_t` | Ponder time **not** charged to the budget: set once at the ponderhit to `pondered * (1000 - ponderCreditPermille) / 1000`; `0` otherwise. |
 | `iterationStartMs_` | `int64_t` | `elapsedMs()` when the current iteration began; lets [`budgetSpent`](#searcherbudgetspent) abort, right after a ponderhit, an iteration the clock would never have started. |
+| `rootDepth_` | `int` | Depth of the in-progress iterative-deepening iteration, set by [`think`](#searcherthink) before each one. Bounds the [extension budget](#searchersearch) in `search`. |
 | `useTime_` | `bool` | Whether a wall-clock budget applies. |
 | `timeUp_` | `bool` | Set once the search must abort; unwinds the recursion. |
 | `pondering_` | `bool` | Still in ponder mode (no `ponderhit` seen yet): every clock check is skipped. Starts as [`Limits::ponder`](#struct-limits); cleared by [`syncPonder`](#searchersyncponder). |
@@ -328,7 +330,8 @@ the same [`awaitRelease`](#searcherawaitrelease) wait).
 `hashfull` field from [`tt_.hashfull()`](tt.hpp.md#transpositiontablehashfull));
 calls [`tt_.newSearch()`](tt.hpp.md#transpositiontablenewsearch) once to advance the
 TT generation; with a network, refreshes `accumulators_[0]` from the root position
-([`nnue::refresh`](nnue.hpp.md#refresh)); resets and updates all timing/node/root-move/PV/ponder members. Reads
+([`nnue::refresh`](nnue.hpp.md#refresh)); resets and updates all timing/node/root-move/PV/ponder members,
+and sets `rootDepth_` before each iteration (the [extension budget](#searchersearch)). Reads
 the shared [`state_`](#enum-class-searchstate) (never writes it); may block on it at the
 end. With `printBest`, probes the TT once more for the ponder reply.
 
@@ -490,9 +493,22 @@ searched exactly.
   ply (by **2** off the PV when they fail more than `singularDoubleMargin` under); if it is
   not singular yet the TT score already beats beta, it is reduced by 1 (a multi-cut-style
   negative extension). The exclusion is threaded via the `excluded` parameter (below).
-- **Check extension** — a move that gives check is searched one ply deeper
-  (`checkExt = 1`), bounded by `ply + 1 < MAX_PLY - 1` so `ply` can never overrun the
-  per-ply tables. The two extensions add: `newDepth = depth − 1 + singularExt + checkExt`.
+- **Check extension** — a move that gives check is searched one ply deeper, **unless** it
+  already earned a positive singular extension (the two never stack), and bounded by
+  `ply + 1 < MAX_PLY - 1` so `ply` can never overrun the per-ply tables:
+  `newDepth = depth − 1 + singularExt + (extendCheck ? 1 : 0)`.
+- **Extension budget** — both positive extensions (singular, check) are only granted while
+  `ply < EXTENSION_PLY_FACTOR · rootDepth_` (2× the iteration's depth), the
+  Stockfish-style cap; a node past it does not even run the singular verification. The
+  negative singular extension is skipped there too. Without the cap, and with singular and
+  check extensions stacking, a checking line that kept being singular *gained* depth every
+  ply: in a queen endgame (KQvK) an iteration exploded — v0.2 completed depth 10 in 0.02 s
+  and then never finished depth 11 in 3 s, ran into the hard time limit nearly every move,
+  and drew 8/8 KQvK test games by the fifty-move rule. With the cap and no stacking the same
+  position reaches depth 19 and 7/8 of those games are mated (6–16 moves). `bench` is
+  unchanged (its depth never reaches the cap). Strength vs v0.2 @ STC 10+0.1, UHO book:
+  **+8.5 ± 3.8 Elo** (51.22%, 12212 games, SPRT `[-1.75, 0.25]` H1 accepted) — a fix that
+  also gains, not just a non-regression.
 - **Late move reductions (LMR)** — late quiet, non-checking moves are searched at
   `newDepth - reduction`, where `reduction` comes from the `ln(depth)·ln(moveCount)`
   table, reduced by one on the PV and one when `improving`, then (when `useHistLmr`)

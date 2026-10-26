@@ -68,6 +68,12 @@ constexpr int ASPIRATION_MIN_DEPTH = 5;
 // verification runs at (depth - 1) / 2. Structural gate; the margins are tunable.
 constexpr int SINGULAR_TT_DEPTH_MARGIN = 3;
 
+// Extension budget: a node may extend (singular or check) only while its ply is below
+// this multiple of the iteration's root depth. A line extended at every ply never loses
+// depth, so without the cap a long checking sequence (queen endgames) blows an
+// iteration up until it never completes.
+constexpr int EXTENSION_PLY_FACTOR = 2;
+
 // Razoring (Phase 1d): near the horizon, a static eval this far below alpha is unlikely
 // to be lifted by a quiet move, so spend a q-search instead of a full-width search and
 // fail low when the q-search agrees. Margins are tunable (Tunables::razorBase /
@@ -435,6 +441,8 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     // history + continuation-history quiets, then losing captures. The biggest speed lever.
     orderMoves(board, moves, ttMove, history_, ply, prevMove, contCtx);
 
+    const bool canExtend = ply < EXTENSION_PLY_FACTOR * rootDepth_;
+
     Value best      = -VALUE_INFINITE;
     Move  bestMove  = Move(Move::NO_MOVE);
     int   moveCount = 0;
@@ -480,7 +488,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         // score already beats beta, reduce it instead (a multi-cut-style negative
         // extension). Never inside a verification search, and never on a mate score.
         int singularExt = 0;
-        if (tp_.useSingular && !inSingular && m == ttMove && ply > 0 && tt.hit &&
+        if (tp_.useSingular && canExtend && !inSingular && m == ttMove && ply > 0 && tt.hit &&
             depth >= tp_.singularMinDepth && tt.depth >= depth - SINGULAR_TT_DEPTH_MARGIN &&
             (tt.bound == BOUND_LOWER || tt.bound == BOUND_EXACT) && ply + 1 < MAX_PLY - 1) {
             const Value ttValue = valueFromTT(tt.value, ply);
@@ -503,10 +511,13 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         makeMove(board, m, ply);
         const bool givesCheck = board.inCheck();
 
-        // Extensions: the singular extension decided above plus a check extension for a
-        // checking reply. Bounded so ply can never overrun the per-ply tables.
-        const int checkExt = (tp_.useCheckExt && givesCheck && ply + 1 < MAX_PLY - 1) ? 1 : 0;
-        const int newDepth = depth - 1 + singularExt + checkExt;
+        // Extensions: the singular extension decided above, or else a check extension for a
+        // checking reply. They never stack: a singular check gaining depth every ply is what
+        // explodes checking endgames. Bounded by the extension budget, and so ply can never
+        // overrun the per-ply tables.
+        const bool extendCheck =
+            tp_.useCheckExt && canExtend && singularExt <= 0 && givesCheck && ply + 1 < MAX_PLY - 1;
+        const int newDepth = depth - 1 + singularExt + (extendCheck ? 1 : 0);
 
         // Late move reductions: search late quiets shallower, less so on the PV or when
         // the eval is improving. A reduced search that beats alpha is re-searched.
@@ -782,6 +793,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
         rootBest_         = Move(Move::NO_MOVE);
+        rootDepth_        = depth;
         iterationStartMs_ = elapsedMs();
         Value v           = aspirationSearch(board, depth, score);
 
