@@ -4,7 +4,8 @@ Unit tests for [NNUE inference](../src/nnue.hpp.md) (`src/nnue.*`). They are **p
 checks** against a synthetic network filled with deterministic random weights
 (`randomNetwork(seed)`: weights in `±40`, mostly positive feature biases so SCReLU is live),
 so the suite needs no trained net file and catches indexing and delta bugs regardless of
-what any real network learned.
+what any real network learned. Two cases widen the output weights to the full accepted range
+to check the vectorised output layer and the loader's range check.
 
 Agreement with a *trained* network was checked separately: net2's engine evals
 (`24 / 1470 / −1404 / 35 / 485` cp) against the trainer's float evals (`33.7 / 1463.6 /
@@ -60,6 +61,22 @@ every call. The network scores the start position within ±100 cp, and a positio
 Black's queen (White to move) above +800 cp, and one missing White's queen (White to move)
 below −800 cp. The bounds are loose on purpose, so retraining the default net doesn't break the
 test. A build without an embedded network skips the checks.
+
+### `evaluate matches the reference formula with full-range output weights`
+
+Checks the vectorised output layer (`activatedDot`, AVX2 "lizard" form in an AVX2 build)
+against the plain formula in [The network](../src/nnue.hpp.md#the-network), computed here in
+64-bit arithmetic with the same final clamp. The output weights fill the whole accepted
+range `±32767 / QA = ±128`, where the int16 product `clamp(x) · w` is closest to
+overflowing. The accumulator lanes are drawn from `[−200, 450]`, so about a third are below 0
+and a third above `QA`, which exercises both clamp edges. 50 random accumulators are checked
+on a 32-piece position (bucket 7) with Black to move, so the perspective order is covered too.
+
+### `a network with an output weight beyond the int16 product range is rejected`
+
+[`networkFromBytes`](../src/nnue.hpp.md#networkfrombytes) accepts a network whose output
+weights reach exactly `+128` and `−128`. It returns `nullptr` once one weight is `129` or
+`−129`. The network is passed as the raw bytes of a `Network`, which mirrors the file layout.
 
 ### `loadNetwork rejects a missing or short file`
 

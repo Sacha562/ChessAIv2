@@ -3,8 +3,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
+
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 using namespace chess;
 
@@ -49,6 +55,9 @@ constexpr int MAX_PIECES   = 32;
 constexpr int MIN_PIECES   = 2; // the two kings
 // Pieces per output bucket, as bullet's MaterialCount<OUTPUT_BUCKETS> divides them.
 constexpr int PIECES_PER_BUCKET = (MAX_PIECES + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
+// activatedDot multiplies a clamped activation (at most QA) by an output weight in int16,
+// so no output weight may exceed this. bullet clips them to about ±127.
+constexpr int MAX_OUTPUT_WEIGHT = std::numeric_limits<int16_t>::max() / QA;
 
 // Bytes of real data in a bullet quantised.bin (the file pads this up to 64).
 constexpr std::streamsize NETWORK_BYTES =
@@ -129,26 +138,68 @@ void applyDelta(const Network& net, const std::array<int16_t, HIDDEN>& parent,
     }
 }
 
-// Square Clipped ReLU: clamp to [0, QA], then square (so the result is in QA^2 units).
-int32_t screlu(int16_t x) {
-    const int32_t v = std::clamp<int32_t>(x, 0, QA);
-    return v * v;
-}
-
 // The output layer a position uses: positions are grouped by piece count, 2-5 pieces in
 // bucket 0 up to 30-32 in bucket 7, matching the trainer's MaterialCount buckets.
 int outputBucket(const Board& board) {
     return (board.occ().count() - MIN_PIECES) / PIECES_PER_BUCKET;
 }
 
-// One perspective's share of the output: sum of SCReLU(acc[i]) * weights[i]. Kept as a
-// single-stream reduction because MinGW GCC 13 (the Windows release compiler) leaves the
-// two-perspective form of this loop scalar, ~3x slower; this form vectorises everywhere.
+#if defined(__AVX2__)
+// Sum of the eight int32 lanes of `v`.
+int32_t horizontalSum(__m256i v) {
+    const __m128i four = _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
+    const __m128i two  = _mm_add_epi32(four, _mm_unpackhi_epi64(four, four));
+    const __m128i one  = _mm_add_epi32(two, _mm_shuffle_epi32(two, 1));
+    return _mm_cvtsi128_si32(one);
+}
+
+// One perspective's share of the output: sum of SCReLU(acc[i]) * weights[i], in the
+// "lizard" form. With v = clamp(acc[i], 0, QA), v * w fits int16 (MAX_OUTPUT_WEIGHT), so
+// vpmullw forms it 16 lanes at a time and vpmaddwd multiplies by v again and adds lane
+// pairs into int32: exactly v^2 * w, without the 8-lane vpmulld the plain v^2 * w form
+// compiles to. Measured: evaluate ~2.3x faster, search +20% nps (nnue.hpp.md#evaluate).
+int32_t activatedDot(const std::array<int16_t, HIDDEN>& acc, const int16_t* weights) {
+    constexpr int LANES = static_cast<int>(sizeof(__m256i) / sizeof(int16_t));
+    static_assert(HIDDEN % LANES == 0);
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i clip = _mm256_set1_epi16(QA);
+    __m256i       sum  = _mm256_setzero_si256();
+    for (int i = 0; i < HIDDEN; i += LANES) {
+        const __m256i x = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(acc.data() + i));
+        const __m256i w = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(weights + i));
+        const __m256i v = _mm256_min_epi16(_mm256_max_epi16(x, zero), clip);
+        sum             = _mm256_add_epi32(sum, _mm256_madd_epi16(_mm256_mullo_epi16(v, w), v));
+    }
+    return horizontalSum(sum);
+}
+#else
+// Square Clipped ReLU: clamp to [0, QA], then square (so the result is in QA^2 units).
+int32_t screlu(int16_t x) {
+    const int32_t v = std::clamp<int32_t>(x, 0, QA);
+    return v * v;
+}
+
+// Portable form of the AVX2 activatedDot above, with the same result. Kept as a
+// single-stream reduction because MinGW GCC 13 leaves the two-perspective form of this
+// loop scalar, ~3x slower; this form auto-vectorises everywhere.
 int32_t activatedDot(const std::array<int16_t, HIDDEN>& acc, const int16_t* weights) {
     int32_t sum = 0;
     for (int i = 0; i < HIDDEN; ++i)
         sum += screlu(acc[i]) * weights[i];
     return sum;
+}
+#endif
+
+bool outputWeightsInRange(const Network& net) {
+    const auto rowInRange = [](const auto& row) {
+        return std::ranges::all_of(row, [](int16_t w) { return std::abs(w) <= MAX_OUTPUT_WEIGHT; });
+    };
+    return std::ranges::all_of(net.outputWeights, rowInRange);
+}
+
+// `net` when activatedDot evaluates it exactly, else nullptr.
+std::unique_ptr<Network> checked(std::unique_ptr<Network> net) {
+    return outputWeightsInRange(*net) ? std::move(net) : nullptr;
 }
 } // namespace
 
@@ -158,14 +209,14 @@ std::unique_ptr<Network> loadNetwork(const std::string& path) {
     in.seekg(0);
     auto net = std::make_unique<Network>();
     in.read(reinterpret_cast<char*>(net.get()), NETWORK_BYTES);
-    return in ? std::move(net) : nullptr;
+    return in ? checked(std::move(net)) : nullptr;
 }
 
 std::unique_ptr<Network> networkFromBytes(const unsigned char* data, std::size_t size) {
     if (data == nullptr || size < static_cast<std::size_t>(NETWORK_BYTES)) return nullptr;
     auto net = std::make_unique<Network>();
     std::memcpy(net.get(), data, static_cast<std::size_t>(NETWORK_BYTES));
-    return net;
+    return checked(std::move(net));
 }
 
 const Network* embeddedNetwork() {

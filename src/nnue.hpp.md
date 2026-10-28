@@ -13,12 +13,15 @@ into the binary ([`embeddedNetwork`](#embeddednetwork), see
 one in its place. The hand-crafted [`evaluate`](eval.hpp.md#evaluate) remains the fallback
 (UCI `UseNNUE false`, or a build that embeds no network).
 
-`update` and `evaluate` are on the **per-node hot path**. They are plain fixed-width
-loops over 1024 `int16` lanes that the compiler auto-vectorises (`-O3 -march=native`). They
-don't allocate and do no I/O. With the first network (`(768 → 512)×2 → 1`, net1) an NNUE
-search ran at about **3.05M nps against 3.24M nps** for the HCE on the 5900X (startpos,
-depth 14). Doubling the width to 1024 for net2 doubles the per-node accumulator and
-output work: `bench` drops from about 2.7M to 2.2M nps on an otherwise idle machine.
+`update` and `evaluate` are on the **per-node hot path**. They don't allocate and do no
+I/O. `update` is a plain fixed-width loop over 1024 `int16` lanes that the compiler
+auto-vectorises (`-O3 -march=native`). `evaluate`'s output layer is hand-written AVX2 in
+an AVX2 build (the "lizard" SCReLU, see [`evaluate`](#evaluate)) and a portable loop
+otherwise. With the first network (`(768 → 512)×2 → 1`, net1) an NNUE search ran at about
+**3.05M nps against 3.24M nps** for the HCE on the 5900X (startpos, depth 14). Doubling the
+width to 1024 for net2 doubles the per-node accumulator and output work: `bench` dropped
+from about 2.7M to 2.2M nps on an otherwise idle machine. The AVX2 output layer then won
+back **+20% nps**.
 
 ## Source Files
 
@@ -34,9 +37,11 @@ output work: `bench` drops from about 2.7M to 2.2M nps on an otherwise idle mach
 - Public API in namespace `engine::nnue`; the header also brings `chess::Color` into
   `engine` (`using chess::Color;`, as [history](history.hpp.md) does).
 - Internal linkage (anonymous namespace in `nnue.cpp`): `NUM_SQUARES`, `THEIR_OFFSET`,
-  `FLIP_RANKS`, `MAX_PIECES`, `MIN_PIECES`, `PIECES_PER_BUCKET`, `NETWORK_BYTES`, the layout
-  `static_assert`s, the `Feature` / `Delta` structs, and the helpers `featureIndex`,
-  `moveDelta`, `applyDelta`, `screlu`, `outputBucket`, `activatedDot`.
+  `FLIP_RANKS`, `MAX_PIECES`, `MIN_PIECES`, `PIECES_PER_BUCKET`, `MAX_OUTPUT_WEIGHT`,
+  `NETWORK_BYTES`, the layout `static_assert`s, the `Feature` / `Delta` structs, and the
+  helpers `featureIndex`, `moveDelta`, `applyDelta`, `outputBucket`, `activatedDot`,
+  `outputWeightsInRange`, `checked`. With AVX2 (`__AVX2__`) there is also `horizontalSum`;
+  without it there is `screlu`.
 - At global scope in `nnue.cpp`, only when the network is embedded: the top-level `asm`
   block and the `extern "C"` symbols `chessai_net_begin` / `chessai_net_end` it defines,
   plus the `CHESSAI_HAS_EMBEDDED_NET` build flag. They are not declared in the header;
@@ -153,8 +158,9 @@ Read a bullet `quantised.bin`.
 **Parameters:** `path` (`const std::string&`) — the file.
 
 **Returns:** `std::unique_ptr<Network>` — the network, or `nullptr` when the file can't be
-opened, is shorter than the 1,607,696 data bytes, or the read fails. Trailing bytes (the
-trainer's padding) are ignored.
+opened, is shorter than the 1,607,696 data bytes, the read fails, or an output weight is
+outside `±MAX_OUTPUT_WEIGHT` (see [`evaluate`](#evaluate)). Trailing bytes (the trainer's
+padding) are ignored.
 
 **Side Effects:** file I/O. Cold path: called once per `EvalFile` change.
 
@@ -169,8 +175,9 @@ Copy a network out of a buffer holding a `quantised.bin`'s contents.
 (`std::size_t`) — their count.
 
 **Returns:** `std::unique_ptr<Network>` — a heap copy (so it is correctly aligned whatever
-`data`'s alignment), or `nullptr` when `data` is null or holds fewer than the 1,607,696 data
-bytes. Trailing bytes are ignored. **Side Effects:** none beyond the allocation.
+`data`'s alignment), or `nullptr` when `data` is null, holds fewer than the 1,607,696 data
+bytes, or has an output weight outside `±MAX_OUTPUT_WEIGHT` (see [`evaluate`](#evaluate)).
+Trailing bytes are ignored. **Side Effects:** none beyond the allocation.
 
 ### `embeddedNetwork`
 
@@ -236,13 +243,26 @@ with that bucket's `outputWeights` row, adds its bias, and rescales (see
 
 **Used by:** [`Searcher::staticEval`](search.hpp.md#searcherstaticeval-private).
 
-**Performance:** per node; 2048 multiply-adds into an `int32` sum, done as two
-single-stream dot products (`activatedDot`, one per perspective). That shape matters: with
-both perspectives accumulated in one loop, MinGW GCC 13 (the Windows release compiler) left
-the loop scalar and NNUE ran at ~0.97M nps against ~3.0M on Linux. Split, it vectorises
-(AVX2) on every compiler, and the Windows build searches at ~3.1M nps. Integer addition is
-associative, so the change left every score, and the bench signature, unchanged.
+**Performance:** per node; 2048 multiply-adds into an `int32` sum, done as two dot products
+(`activatedDot`, one per perspective).
+
+- **AVX2 build (the "lizard" SCReLU).** With `v = clamp(x, 0, QA)`, the product `v · w`
+  fits `int16` because every output weight is within `±MAX_OUTPUT_WEIGHT = 32767 / QA = 128`
+  (bullet clips them to about ±127; net2 spans exactly ±127). So `vpmullw` forms `v · w`
+  16 lanes at a time, and `vpmaddwd` multiplies by `v` again and adds lane pairs into
+  `int32`. The result is exactly `v² · w`, without the 8-lane `vpmulld` the plain form
+  needs. `horizontalSum` folds the eight `int32` lanes at the end. Measured on the 5900X:
+  `evaluate` drops from about 130 to 56 ns per call, and 4M-node searches run **+20% nps**
+  (median of 15 interleaved pairs over three positions, against v0.3).
+- **Portable build.** The plain `Σ screlu(x) · w` loop, auto-vectorised. It is written as a
+  single-stream reduction per perspective because MinGW GCC 13 (the Windows release
+  compiler) left the two-perspective form scalar (~0.97M against ~3.0M nps).
+
+Both forms give identical scores (integer addition is associative), so the bench signature
+is unchanged.
 
 **Warnings:** the sum is `int32`, like bullet's reference inference. Its theoretical worst
 case (every lane saturated against maximal weights) exceeds the range, but trained networks
-stay far below it.
+stay far below it. The lizard form is only exact for output weights within
+`±MAX_OUTPUT_WEIGHT`. The loaders enforce this, so a network built some other way must
+respect it too.

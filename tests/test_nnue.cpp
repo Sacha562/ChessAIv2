@@ -3,13 +3,17 @@
 // incremental accumulator update must equal a from-scratch refresh after every move of
 // random playouts (covering castling, en passant, promotions and captures), a position
 // and its colour-mirrored twin must evaluate identically from the side to move, the output
-// row must follow the piece count, and the loader must reject missing or short files.
+// row must follow the piece count, the (vectorised) output layer must equal the plain
+// formula at full weight range, and the loaders must reject missing or short files and
+// output weights too large for the int16 product.
 #include "doctest.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -23,6 +27,11 @@ using namespace chess;
 namespace {
 constexpr int WEIGHT_RANGE  = 40; // small enough that no accumulator can overflow int16
 constexpr int PLAYOUT_PLIES = 120;
+// The largest output weight nnue accepts: clamp(x) * w must fit int16.
+constexpr int MAX_OUTPUT_WEIGHT = std::numeric_limits<int16_t>::max() / nnue::QA;
+// Synthetic accumulator lanes: about a third negative (SCReLU 0), a third above QA.
+constexpr int ACC_LOW  = -200;
+constexpr int ACC_HIGH = 450;
 
 std::unique_ptr<nnue::Network> randomNetwork(uint64_t seed) {
     auto                               net = std::make_unique<nnue::Network>();
@@ -122,6 +131,58 @@ TEST_CASE("the output bucket follows the piece count") {
         nnue::refresh(*net, board, acc);
         CHECK(nnue::evaluate(*net, acc, board) == (bucket + 1) * 10);
     }
+}
+
+TEST_CASE("evaluate matches the reference formula with full-range output weights") {
+    // Accumulators straddle both clamp edges and the output weights span the whole range a
+    // trained net may use, so the vectorised activatedDot is checked where its int16
+    // product is tightest. The reference is the plain formula in 64-bit arithmetic.
+    auto                               net = randomNetwork(4);
+    std::mt19937_64                    rng(11);
+    std::uniform_int_distribution<int> weight(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT);
+    std::uniform_int_distribution<int> lane(ACC_LOW, ACC_HIGH);
+    for (auto& row : net->outputWeights)
+        for (auto& v : row)
+            v = static_cast<int16_t>(weight(rng));
+
+    const Board board("r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 4 4");
+    const int   bucket = nnue::OUTPUT_BUCKETS - 1; // all 32 pieces on the board
+    for (int trial = 0; trial < 50; ++trial) {
+        nnue::Accumulator acc;
+        for (auto& side : acc.values)
+            for (auto& v : side)
+                v = static_cast<int16_t>(lane(rng));
+
+        const auto& ours   = acc.values[static_cast<int>(board.sideToMove())];
+        const auto& theirs = acc.values[static_cast<int>(~board.sideToMove())];
+        const auto& w      = net->outputWeights[bucket];
+        const auto  act    = [](int16_t x) { return std::clamp<int64_t>(x, 0, nnue::QA); };
+        int64_t     sum    = 0;
+        for (int i = 0; i < nnue::HIDDEN; ++i)
+            sum += act(ours[i]) * act(ours[i]) * w[i] +
+                   act(theirs[i]) * act(theirs[i]) * w[nnue::HIDDEN + i];
+        const int64_t raw =
+            (sum / nnue::QA + net->outputBias[bucket]) * nnue::SCALE / (nnue::QA * nnue::QB);
+        const int64_t expected =
+            std::clamp<int64_t>(raw, VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1);
+        REQUIRE(nnue::evaluate(*net, acc, board) == expected);
+    }
+}
+
+TEST_CASE("a network with an output weight beyond the int16 product range is rejected") {
+    auto       net   = randomNetwork(5);
+    const auto bytes = [&net] {
+        return nnue::networkFromBytes(reinterpret_cast<const unsigned char*>(net.get()),
+                                      sizeof(nnue::Network));
+    };
+    net->outputWeights[3][5] = MAX_OUTPUT_WEIGHT;
+    net->outputWeights[6][9] = -MAX_OUTPUT_WEIGHT;
+    CHECK(bytes() != nullptr);
+    net->outputWeights[3][5] = MAX_OUTPUT_WEIGHT + 1;
+    CHECK(bytes() == nullptr);
+    net->outputWeights[3][5] = 0;
+    net->outputWeights[6][9] = -MAX_OUTPUT_WEIGHT - 1;
+    CHECK(bytes() == nullptr);
 }
 
 TEST_CASE("loadNetwork rejects a missing or short file") {
