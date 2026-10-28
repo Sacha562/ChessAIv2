@@ -191,6 +191,15 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.assumedMovestogo = std::clamp(std::stoi(value), 1, 300);
         } else if (name == "PonderCreditPermille" && !value.empty()) {
             tunables_.ponderCreditPermille = std::clamp(std::stoi(value), 0, 1000);
+        } else if (name == "UseStabilityTm" && !value.empty()) {
+            tunables_.useStabilityTm = std::clamp(std::stoi(value), 0, 1) != 0;
+        } else if (name == "TmNodeBase" && !value.empty()) {
+            tunables_.tmNodeBase = std::clamp(std::stoi(value), 100, 300);
+        } else if (name == "TmNodeScale" && !value.empty()) {
+            tunables_.tmNodeScale = std::clamp(std::stoi(value), 50, 400);
+        } else if (name.starts_with("TmStab") && name.size() == 7 && name[6] >= '0' &&
+                   name[6] <= '4' && !value.empty()) {
+            tunables_.tmStability[name[6] - '0'] = std::clamp(std::stoi(value), 10, 500);
         } else if (name == "Tempo" && !value.empty()) {
             tunables_.tempo = std::clamp(std::stoi(value), 0, 100);
         } else if (name == "DeltaMargin" && !value.empty()) {
@@ -305,6 +314,14 @@ void Engine::loop() {
                       << "option name AssumedMovestogo type spin default 30 min 1 max 300\n"
                       << "option name Ponder type check default false\n"
                       << "option name PonderCreditPermille type spin default 500 min 0 max 1000\n"
+                      << "option name UseStabilityTm type spin default 1 min 0 max 1\n"
+                      << "option name TmNodeBase type spin default 153 min 100 max 300\n"
+                      << "option name TmNodeScale type spin default 174 min 50 max 400\n"
+                      << "option name TmStab0 type spin default 238 min 10 max 500\n"
+                      << "option name TmStab1 type spin default 129 min 10 max 500\n"
+                      << "option name TmStab2 type spin default 107 min 10 max 500\n"
+                      << "option name TmStab3 type spin default 91 min 10 max 500\n"
+                      << "option name TmStab4 type spin default 71 min 10 max 500\n"
                       << "option name Tempo type spin default 9 min 0 max 100\n"
                       << "option name DeltaMargin type spin default 203 min 0 max 1000\n"
                       << "option name EndgamePieces type spin default 7 min 0 max 32\n"

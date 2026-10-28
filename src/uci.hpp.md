@@ -95,7 +95,11 @@ default `<embedded>`) calls [`loadEvalFile`](#engineloadevalfile-internal); `Use
 Recognized tunable options:
 `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille`
 (`0`–`1000`, default `500`: the share of ponder time charged to the move at `ponderhit`;
-see [`Tunables`](search.hpp.md#struct-tunables)), `Tempo`, `DeltaMargin`,
+see [`Tunables`](search.hpp.md#struct-tunables)), the stability time-management knobs
+`UseStabilityTm` (`spin` `0`/`1`, default `1`), `TmNodeBase` (`100`–`300`, default `153`),
+`TmNodeScale` (`50`–`400`, default `174`) and `TmStab0`–`TmStab4` (`10`–`500`, defaults
+`238 / 129 / 107 / 91 / 71`; a `TmStab` name with any other suffix is ignored; see
+[`scaleSoftLimit`](search.hpp.md#searcherscalesoftlimit-private)), `Tempo`, `DeltaMargin`,
 and `EndgamePieces`, plus the selective-search toggles (`spin`, `0`/`1`) used to
 A/B-isolate each signal's Elo: the ordering signals `UseKillers`, `UseHistory`,
 `UseCountermove`, `UseIIR` (all default `1` — history and IIR both inverted from step-1

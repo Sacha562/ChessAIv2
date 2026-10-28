@@ -126,6 +126,10 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `hardPermille` | `int` | `2400` | Hard limit = `base * hardPermille / 1000`. Past it, the search aborts mid-iteration. |
 | `assumedMovestogo` | `int` | `30` | Horizon assumed under sudden death; an explicit `movestogo` overrides it. Divides the clock, so it must stay `>= 1`. |
 | `ponderCreditPermille` | `int` | `500` | At `ponderhit`, this permille of the time already spent pondering is charged to the move's budget (`PonderCreditPermille`, 0–1000). `0` = the budget starts fresh at the hit (most depth on a correct guess); `1000` = pondering counts in full (often an instant move, banking clock). Untested default; meant for SPSA / SPRT. Applied by [`syncPonder`](#searchersyncponder). |
+| `useStabilityTm` | `bool` | `true` | Stability time management (`UseStabilityTm`, 0/1): after each completed iteration from depth `TM_SCALE_MIN_DEPTH` (6), a clock search's soft limit is rescaled by the best root move's node share and how long it has held. See [`scaleSoftLimit`](#searcherscalesoftlimit-private). Off reproduces v0.3.1's fixed soft limit exactly. |
+| `tmNodeBase` | `int` | `153` | Node-fraction term, ×100: `nodeScale = (tmNodeBase/100 − f) · tmNodeScale/100`, `f` = share of all nodes spent under the best root move (`TmNodeBase`, 100–300). |
+| `tmNodeScale` | `int` | `174` | Node-fraction multiplier, ×100 (`TmNodeScale`, 50–400). With the defaults: `f = 0.5` → ×1.79, `f = 0.9` → ×1.10, `f = 1` → ×0.92. |
+| `tmStability` | `std::array<int, 5>` | `{238, 129, 107, 91, 71}` | Best-move stability multipliers, ×100, indexed by the number of completed iterations the best move has held (capped at 4): a new best move gets ×2.38, one held 4+ iterations ×0.71 (`TmStab0`–`TmStab4`, 10–500). Defaults are Alexandria's SPSA-tuned values. |
 | `tempo` | `Value` | `9` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
 | `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
@@ -289,11 +293,15 @@ pointer: with a network the static eval is NNUE, without one (the default, and w
 | `useTime_` | `bool` | Whether a wall-clock budget applies. |
 | `timeUp_` | `bool` | Set once the search must abort; unwinds the recursion. |
 | `pondering_` | `bool` | Still in ponder mode (no `ponderhit` seen yet): every clock check is skipped. Starts as [`Limits::ponder`](#struct-limits); cleared by [`syncPonder`](#searchersyncponder). |
+| `rootMoveNodes_` | `std::array<uint64_t, 64 * 64>` | Nodes searched under each root move (index `from · 64 + to`), summed over every iteration of this `think` (32 KB, zeroed per `think`). Feeds the node fraction of [`scaleSoftLimit`](#searcherscalesoftlimit-private). |
+| `softBaseMs_` | `int64_t` | The clock's soft limit as [`setupTiming`](#searchersetuptiming) computed it, before any stability scaling; every rescale starts from it. |
+| `scaleSoft_` | `bool` | `true` only when a clock (`wtime`/`btime`) set the limits — never for `movetime`, depth, nodes or soft-node searches, which stability scaling must not touch. |
+| `bestStreak_` | `int` | Completed iterations in a row whose best move matched the previous one's (`0` after a change). |
 | `rootBest_` | `Move` | Best move of the in-progress iteration. |
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 | `rootScore_` | `Value` | Score of the last **completed** iteration (side-to-move cp; `VALUE_ZERO` until one completes). Read through [`score`](#searcherscore). |
 
-**Methods:** [`Searcher::Searcher`](#searchersearcher), [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::staticEval`](#searcherstaticeval), [`Searcher::makeMove` / `makeNullMove`](#searchermakemove--searchermakenullmove-private), [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
+**Methods:** [`Searcher::Searcher`](#searchersearcher), [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::staticEval`](#searcherstaticeval), [`Searcher::makeMove` / `makeNullMove`](#searchermakemove--searchermakenullmove-private), [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::scaleSoftLimit`](#searcherscalesoftlimit-private), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md), [datagen](datagen.hpp.md)
 
@@ -340,7 +348,9 @@ end. With `printBest`, probes the TT once more for the ponder reply.
 depth 1. An aborted iteration is discarded (the previous completed iteration's move
 stands). Soft stop: once [`clockMs`](#searcherclockms) reaches
 [`softLimitMs_`](#class-searcher) no new depth is started; the current depth may still
-run until the hard limit. A [`softNodes`](#struct-limits) budget works the same way in
+run until the hard limit. After each completed iteration `think` updates `bestStreak_`
+and calls [`scaleSoftLimit`](#searcherscalesoftlimit-private) (before the soft check),
+so under a clock the soft limit moves with the root's stability. A [`softNodes`](#struct-limits) budget works the same way in
 nodes: the iteration that crosses it completes, then the loop stops (checked right after
 the iteration is recorded, before the clock's soft check). While pondering, neither limit applies — the search keeps
 deepening until the `ponderhit`; [`syncPonder`](#searchersyncponder) runs before the
@@ -798,7 +808,36 @@ Called once at the top of [`think`](#searcherthink).
 - **clock (`wtime`/`btime`…)**: `base = remaining/movestogo + inc/2` (movestogo
   defaults to `tp_.assumedMovestogo`), then soft/hard scale off `base` by permille.
   The hard limit is capped at half the remaining clock (minus overhead) so the
-  engine never flags, and soft is clamped to ≤ hard.
+  engine never flags, and soft is clamped to ≤ hard. This branch alone also stores the
+  soft limit as `softBaseMs_` and sets `scaleSoft_`, enabling
+  [`scaleSoftLimit`](#searcherscalesoftlimit-private).
+
+### `Searcher::scaleSoftLimit` (private)
+
+Stability time management. Called by [`think`](#searcherthink) after every completed
+iteration with its `depth`; a no-op unless `scaleSoft_` (a clock search),
+`tp_.useStabilityTm`, and `depth ≥ TM_SCALE_MIN_DEPTH` (6; shallower iterations are too
+cheap and noisy to judge).
+
+```
+f          = rootMoveNodes_[best] / nodes_          (share of all nodes under the best move)
+nodeScale  = (tmNodeBase/100 − f) · tmNodeScale/100
+stabScale  = tmStability[min(bestStreak_, 4)] / 100
+softLimitMs_ = clamp(softBaseMs_ · nodeScale · stabScale, 1, hardLimitMs_)
+```
+
+A contested root (the best move took a small share of the effort, or just changed)
+gets more time; a settled one (large share, held for several iterations) stops early.
+Each call scales the **base** soft limit, so factors never compound across iterations,
+and the result never passes the hard limit. While pondering it still runs, so the limit
+[`budgetSpent`](#searcherbudgetspent) and the soft check see after a `ponderhit` is
+already scaled. Untimed searches (bench, datagen's soft nodes, `movetime`) are untouched,
+so the bench signature does not change.
+
+**Root node accounting** (in [`search`](#searchersearch)): at `ply == 0`, outside a
+singular verification (which would count the same moves twice), the nodes searched under
+each root move are added to `rootMoveNodes_[from · 64 + to]` right after its unmake —
+aborted moves included, since only the ratio matters.
 
 ### `Searcher::checkStop` (private)
 

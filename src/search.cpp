@@ -21,6 +21,16 @@ namespace {
 constexpr int64_t MOVE_OVERHEAD_MS = 30;
 constexpr int64_t TIME_CHECK_MASK  = 2047; // check clock every 2048 nodes
 
+// Stability time management only rescales the soft limit from this depth: shallower
+// iterations are too cheap and noisy for the best move's node share to mean much.
+constexpr int TM_SCALE_MIN_DEPTH = 6;
+constexpr int NUM_SQUARES        = 64;
+
+// Index of a root move in Searcher::rootMoveNodes_.
+int rootMoveIndex(Move m) {
+    return m.from().index() * NUM_SQUARES + m.to().index();
+}
+
 // Root depth cap when a clock governs the move but only one legal move exists: there is
 // nothing to choose, so don't burn the budget — a few cheap plies still report a sane
 // score and PV and leave the TT warm for the next move.
@@ -203,6 +213,7 @@ void Searcher::awaitRelease(bool infinite) const {
 void Searcher::setupTiming(const Limits& limits, const Board& board) {
     nodeLimit_   = limits.nodes;
     useTime_     = false;
+    scaleSoft_   = false;
     softLimitMs_ = std::numeric_limits<int64_t>::max();
     hardLimitMs_ = std::numeric_limits<int64_t>::max();
 
@@ -237,6 +248,25 @@ void Searcher::setupTiming(const Limits& limits, const Board& board) {
 
     softLimitMs_ = std::max<int64_t>(1, soft);
     hardLimitMs_ = std::max<int64_t>(1, hard);
+    softBaseMs_  = softLimitMs_;
+    scaleSoft_   = true;
+}
+
+// Stability time management: after a completed iteration, rescale the clock's soft limit
+// by how settled the root looks (see Tunables::useStabilityTm). Always from the base
+// soft limit, so the scales never compound across iterations; never past the hard limit.
+// While pondering this keeps the limit current, so a ponderhit checks the scaled value.
+void Searcher::scaleSoftLimit(int depth) {
+    if (!scaleSoft_ || !tp_.useStabilityTm || depth < TM_SCALE_MIN_DEPTH || nodes_ == 0) return;
+    const double bestShare =
+        static_cast<double>(rootMoveNodes_[rootMoveIndex(rootBestCompleted_)]) /
+        static_cast<double>(nodes_);
+    const double nodeScale = (tp_.tmNodeBase / 100.0 - bestShare) * tp_.tmNodeScale / 100.0;
+    const int    streak = std::min<int>(bestStreak_, static_cast<int>(tp_.tmStability.size()) - 1);
+    const double stabScale = tp_.tmStability[streak] / 100.0;
+    const auto   scaled =
+        static_cast<int64_t>(static_cast<double>(softBaseMs_) * nodeScale * stabScale);
+    softLimitMs_ = std::clamp<int64_t>(scaled, 1, hardLimitMs_);
 }
 
 // (Re)build the LMR reduction table from the tunable curve
@@ -506,6 +536,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         }
 
         tt_.prefetch(board.zobristAfter(m));
+        const uint64_t nodesBefore = nodes_;
         contPiece_[ply] = movedPiece; // search-stack record for the child's continuation history
         contTo_[ply]    = m.to().index();
         makeMove(board, m, ply);
@@ -550,6 +581,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         }
 
         board.unmakeMove(m);
+
+        // Time management's effort count; a singular verification re-searching the root
+        // would count the same moves twice.
+        if (ply == 0 && !inSingular) rootMoveNodes_[rootMoveIndex(m)] += nodes_ - nodesBefore;
 
         if (timeUp_) return VALUE_ZERO; // abort: discard partial result (no TT store)
 
@@ -760,6 +795,8 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     pondering_         = limits.ponder;
     ponderDiscountMs_  = 0;
     iterationStartMs_  = 0;
+    bestStreak_        = 0;
+    rootMoveNodes_.fill(0);
 
     // Guarantee a legal fallback so we never emit a null bestmove.
     bool onlyMove = false;
@@ -799,10 +836,12 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
 
         if (timeUp_) break; // incomplete iteration: keep previous best
 
+        bestStreak_        = (rootBest_ == rootBestCompleted_) ? bestStreak_ + 1 : 0;
         score              = v;
         rootScore_         = v;
         rootBestCompleted_ = rootBest_;
         saveRootPv();
+        scaleSoftLimit(depth);
 
         if (printInfo) reportIteration(depth, score);
 

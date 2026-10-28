@@ -55,6 +55,19 @@ struct Tunables {
     // move); 1000 = pondering counts in full (often an instant move, banking the clock).
     int ponderCreditPermille = 500;
 
+    // Stability time management: after each completed iteration (from TM_SCALE_MIN_DEPTH,
+    // search.cpp) a clock search's soft limit becomes its base soft limit times
+    //   nodeScale = (tmNodeBase / 100 - f) * tmNodeScale / 100
+    //   stabScale = tmStability[min(streak, 4)] / 100
+    // where f is the share of all nodes spent under the best root move and `streak` the
+    // number of completed iterations that move has held. A contested root (low f, a new
+    // best move) earns more time; a settled one stops early. Defaults are Alexandria's
+    // SPSA-tuned constants; all are UCI-tunable.
+    bool               useStabilityTm = true;
+    int                tmNodeBase     = 153;
+    int                tmNodeScale    = 174;
+    std::array<int, 5> tmStability    = {238, 129, 107, 91, 71};
+
     // Evaluation.
     Value tempo = 9; // side-to-move bonus (centipawns)
 
@@ -187,6 +200,7 @@ private:
     void makeNullMove(Board& board, int ply);
 
     void    setupTiming(const Limits& limits, const Board& board);
+    void    scaleSoftLimit(int depth);
     bool    checkStop();
     void    syncPonder();
     bool    budgetSpent() const;
@@ -246,6 +260,13 @@ private:
     bool    useTime_          = false;
     bool    timeUp_           = false;
     bool    pondering_        = false; // no ponderhit yet: the clock does not run
+
+    // Stability time management (Tunables::useStabilityTm). Node counts accumulate over
+    // the whole `think`, indexed by the root move's from * 64 + to.
+    std::array<uint64_t, 64 * 64> rootMoveNodes_{};
+    int64_t                       softBaseMs_ = 0;     // the clock's soft limit before scaling
+    bool                          scaleSoft_  = false; // a clock (not movetime) set the limits
+    int                           bestStreak_ = 0;     // completed iterations the best move held
 
     Move  rootBest_          = Move(Move::NO_MOVE); // best of the in-progress iteration
     Move  rootBestCompleted_ = Move(Move::NO_MOVE); // best of the last completed iteration
