@@ -6,9 +6,9 @@ checks** against a synthetic network filled with deterministic random weights
 so the suite needs no trained net file and catches indexing and delta bugs regardless of
 what any real network learned.
 
-Agreement with a *trained* network was checked separately: net1's engine evals
-(`33 / 1378 / −1311 / 43` cp) against the trainer's float evals (`31.0 / 1380.2 / −1316.1 /
-33.6`). See [nnue.hpp.md](../src/nnue.hpp.md#the-network).
+Agreement with a *trained* network was checked separately: net2's engine evals
+(`24 / 1470 / −1404 / 35 / 485` cp) against the trainer's float evals (`33.7 / 1463.6 /
+−1387.8 / 42.5 / 488.2`). See [nnue.hpp.md](../src/nnue.hpp.md#the-network).
 
 ## Test Code
 
@@ -35,7 +35,7 @@ From five start positions chosen to reach castling (both sides, both wings), en 
 and promotions (with and without capture) early, eight random playouts of up to 120 plies
 each. After every move, the accumulator built by [`update`](../src/nnue.hpp.md#update) from
 the parent must equal a from-scratch [`refresh`](../src/nnue.hpp.md#refresh) of the new
-position, for both perspectives and all 512 lanes. Over 1000 moves must be checked.
+position, for both perspectives and all 1024 lanes. Over 1000 moves must be checked.
 
 ### `a colour-mirrored position evaluates the same for the side to move`
 
@@ -43,6 +43,14 @@ A position and its colour-flipped twin (ranks mirrored, colours swapped, the oth
 move) must give the identical [`evaluate`](../src/nnue.hpp.md#evaluate) score. Run after
 1.e4 and on an Italian-opening middlegame. This pins the perspective mirroring
 (`sq ^ 56`) and the own/theirs feature split.
+
+### `the output bucket follows the piece count`
+
+With every output weight zeroed and bucket `b`'s bias set to give exactly `10 · (b + 1)` cp,
+[`evaluate`](../src/nnue.hpp.md#evaluate) returns the bias of the bucket the position falls
+in, so the score names the bucket. Positions with 3, 5, 6, 29, 30, 31 and 32 pieces must
+land in buckets 0, 0, 1, 6, 7, 7 and 7. This pins the `(pieces − 2) / 4` rule at both ends
+and across bucket edges, which must match the trainer's `MaterialCount<8>`.
 
 ### `the embedded default network loads and judges material sensibly`
 

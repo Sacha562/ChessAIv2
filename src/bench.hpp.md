@@ -55,8 +55,8 @@ guard after changes to search/movegen.
 and a final `<totalNodes> nodes <nps> nps` summary. Runs [`Searcher::think`](search.hpp.md#searcherthink)
 with `printBest=false, printInfo=false`.
 
-**Signature:** **46577 nodes** with the default network `nets/net1.bin` embedded (it was
-62915 with the hand-crafted eval, before NNUE became the default). The count depends on the
+**Signature:** **42410 nodes** with the default network `nets/net2.bin` embedded (46577
+with net1, and 62915 with the hand-crafted eval before NNUE became the default). The count depends on the
 embedded network, so a different `EVALFILE` (or none) gives a different signature. `bench`
 ignores `setoption`, so `EvalFile` and `UseNNUE` never change it.
 

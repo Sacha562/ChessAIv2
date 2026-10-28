@@ -45,14 +45,20 @@ namespace {
 constexpr int NUM_SQUARES  = 64;
 constexpr int THEIR_OFFSET = 6 * NUM_SQUARES; // their pieces follow our six piece blocks
 constexpr int FLIP_RANKS   = 56;              // sq ^ 56 mirrors a1 <-> a8 for Black's view
+constexpr int MAX_PIECES   = 32;
+constexpr int MIN_PIECES   = 2; // the two kings
+// Pieces per output bucket, as bullet's MaterialCount<OUTPUT_BUCKETS> divides them.
+constexpr int PIECES_PER_BUCKET = (MAX_PIECES + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
 
 // Bytes of real data in a bullet quantised.bin (the file pads this up to 64).
 constexpr std::streamsize NETWORK_BYTES =
-    static_cast<std::streamsize>(sizeof(int16_t)) * (INPUTS * HIDDEN + HIDDEN + 2 * HIDDEN + 1);
+    static_cast<std::streamsize>(sizeof(int16_t)) *
+    (INPUTS * HIDDEN + HIDDEN + OUTPUT_BUCKETS * (2 * HIDDEN + 1));
 
 static_assert(offsetof(Network, featureBias) == sizeof(int16_t) * INPUTS * HIDDEN);
 static_assert(offsetof(Network, outputWeights) == sizeof(int16_t) * (INPUTS + 1) * HIDDEN);
-static_assert(offsetof(Network, outputBias) == sizeof(int16_t) * (INPUTS + 3) * HIDDEN);
+static_assert(offsetof(Network, outputBias) ==
+              sizeof(int16_t) * (INPUTS + 1 + 2 * OUTPUT_BUCKETS) * HIDDEN);
 
 // One input feature before it is indexed for a perspective.
 struct Feature {
@@ -127,6 +133,12 @@ void applyDelta(const Network& net, const std::array<int16_t, HIDDEN>& parent,
 int32_t screlu(int16_t x) {
     const int32_t v = std::clamp<int32_t>(x, 0, QA);
     return v * v;
+}
+
+// The output layer a position uses: positions are grouped by piece count, 2-5 pieces in
+// bucket 0 up to 30-32 in bucket 7, matching the trainer's MaterialCount buckets.
+int outputBucket(const Board& board) {
+    return (board.occ().count() - MIN_PIECES) / PIECES_PER_BUCKET;
 }
 
 // One perspective's share of the output: sum of SCReLU(acc[i]) * weights[i]. Kept as a
@@ -205,17 +217,20 @@ void update(const Network& net, const Board& board, Move move, const Accumulator
     }
 }
 
-Value evaluate(const Network& net, const Accumulator& acc, Color stm) {
-    const auto& ours   = acc.values[static_cast<int>(stm)];
-    const auto& theirs = acc.values[static_cast<int>(~stm)];
+Value evaluate(const Network& net, const Accumulator& acc, const Board& board) {
+    const Color stm     = board.sideToMove();
+    const auto& ours    = acc.values[static_cast<int>(stm)];
+    const auto& theirs  = acc.values[static_cast<int>(~stm)];
+    const int   bucket  = outputBucket(board);
+    const auto& weights = net.outputWeights[bucket];
 
     // int32 is the reference implementation's accumulator width; real activations stay
     // far below its range (the theoretical worst case does not occur in play).
-    const int32_t sum = activatedDot(ours, net.outputWeights.data()) +
-                        activatedDot(theirs, net.outputWeights.data() + HIDDEN);
+    const int32_t sum =
+        activatedDot(ours, weights.data()) + activatedDot(theirs, weights.data() + HIDDEN);
 
     // QA^2 * QB units -> QA * QB, add the bias, then scale to centipawns.
-    const int32_t output = (sum / QA + net.outputBias) * SCALE / (QA * QB);
+    const int32_t output = (sum / QA + net.outputBias[bucket]) * SCALE / (QA * QB);
     return std::clamp<Value>(output, VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1);
 }
 

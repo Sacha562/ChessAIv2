@@ -2,8 +2,8 @@
 // synthetic, deterministically random network, so no trained net file is needed — the
 // incremental accumulator update must equal a from-scratch refresh after every move of
 // random playouts (covering castling, en passant, promotions and captures), a position
-// and its colour-mirrored twin must evaluate identically from the side to move, and the
-// loader must reject missing or short files.
+// and its colour-mirrored twin must evaluate identically from the side to move, the output
+// row must follow the piece count, and the loader must reject missing or short files.
 #include "doctest.h"
 
 #include <cstdint>
@@ -33,9 +33,11 @@ std::unique_ptr<nnue::Network> randomNetwork(uint64_t seed) {
             v = static_cast<int16_t>(w(rng));
     for (auto& v : net->featureBias)
         v = static_cast<int16_t>(w(rng) + WEIGHT_RANGE); // mostly positive: SCReLU is live
-    for (auto& v : net->outputWeights)
+    for (auto& row : net->outputWeights)
+        for (auto& v : row)
+            v = static_cast<int16_t>(w(rng));
+    for (auto& v : net->outputBias)
         v = static_cast<int16_t>(w(rng));
-    net->outputBias = static_cast<int16_t>(w(rng));
     return net;
 }
 
@@ -91,8 +93,34 @@ TEST_CASE("a colour-mirrored position evaluates the same for the side to move") 
         nnue::Accumulator accA, accB;
         nnue::refresh(*net, a, accA);
         nnue::refresh(*net, b, accB);
-        CHECK(nnue::evaluate(*net, accA, a.sideToMove()) ==
-              nnue::evaluate(*net, accB, b.sideToMove()));
+        CHECK(nnue::evaluate(*net, accA, a) == nnue::evaluate(*net, accB, b));
+    }
+}
+
+TEST_CASE("the output bucket follows the piece count") {
+    // Zero output weights leave only the bucket's bias, so the score names the bucket.
+    auto net = randomNetwork(3);
+    for (auto& row : net->outputWeights)
+        row.fill(0);
+    constexpr int16_t BIAS_STEP = nnue::QA * nnue::QB / 40; // 10 cp per bucket
+    for (int b = 0; b < nnue::OUTPUT_BUCKETS; ++b)
+        net->outputBias[b] = static_cast<int16_t>((b + 1) * BIAS_STEP);
+
+    const std::pair<const char*, int> cases[] = {
+        {"8/8/8/4k3/8/8/8/3QK3 w - - 0 1", 0},                                       // 3 pieces
+        {"8/8/8/3pk3/8/2N5/8/3QK3 w - - 0 1", 0},                                    // 5
+        {"8/8/8/3pk3/8/2NB4/8/3QK3 w - - 0 1", 1},                                   // 6
+        {"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 7}, // 32
+        {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 7},             // 32
+        {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKB1R w KQkq - 0 1", 7},             // 31
+        {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKB1R w KQkq - 0 1", 7},             // 30
+        {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQK2R w KQkq - 0 1", 6},              // 29
+    };
+    for (const auto& [fen, bucket] : cases) {
+        const Board       board(fen);
+        nnue::Accumulator acc;
+        nnue::refresh(*net, board, acc);
+        CHECK(nnue::evaluate(*net, acc, board) == (bucket + 1) * 10);
     }
 }
 
@@ -118,7 +146,7 @@ TEST_CASE("the embedded default network loads and judges material sensibly") {
         const Board       board(fen);
         nnue::Accumulator acc;
         nnue::refresh(*net, board, acc);
-        return nnue::evaluate(*net, acc, board.sideToMove());
+        return nnue::evaluate(*net, acc, board);
     };
     const Value start = eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     CHECK(std::abs(start) < 100);

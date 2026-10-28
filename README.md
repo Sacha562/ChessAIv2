@@ -224,7 +224,7 @@ src/nnue.*              NNUE evaluation: embedded net, incremental accumulators
 src/eval.*              hand-crafted tapered evaluation (EvalParams), the fallback
 src/datagen.*           self-play training-data generator (chessai datagen)
 src/viriformat.*        viriformat game encoder for the bullet trainer
-nets/net1.bin           default NNUE network, embedded at build time
+nets/net2.bin           default NNUE network, embedded at build time
 src/tt.*                transposition table (bucketed, aged, lock-less)
 src/uci.*               UCI command loop and options
 src/perft.*             perft + correctness suite

@@ -129,7 +129,7 @@ Searcher::Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tuna
 
 Value Searcher::staticEval(const Board& board, int ply) const {
     if (!net_) return evaluate(board, tp_.tempo);
-    return nnue::evaluate(*net_, (*accumulators_)[ply], board.sideToMove());
+    return nnue::evaluate(*net_, (*accumulators_)[ply], board);
 }
 
 void Searcher::makeMove(Board& board, Move move, int ply) {

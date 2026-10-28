@@ -681,11 +681,11 @@ allocation per searcher, never per node).
 ### `Searcher::staticEval` (private)
 
 Return the raw static eval ([`Value`](types.hpp.md#using-value--int), side-to-move cp) of
-the node at `ply`: [`nnue::evaluate`](nnue.hpp.md#evaluate) on `accumulators_[ply]` when a
+the node at `ply`: [`nnue::evaluate`](nnue.hpp.md#evaluate) on `accumulators_[ply]` and `board` (whose piece count picks the output bucket) when a
 network is loaded, else [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`. The
 network ignores `Tempo` (it learned the side-to-move effect itself). The result is what
 goes into the TT; [`correctedEval`](#searchercorrectedeval) is applied on top as before.
-**Performance:** per node; the NNUE path is one 1024-wide SCReLU dot product.
+**Performance:** per node; the NNUE path is one 2048-wide SCReLU dot product against the bucket's output row.
 
 ### `Searcher::makeMove` / `Searcher::makeNullMove` (private)
 
