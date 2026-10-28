@@ -160,8 +160,8 @@ printf "bench\nquit\n" | ./chessai-$V-linux-bmi2 | tail -1   # must match the ta
 
 The Windows builds are static (MinGW cross-compiler) so they need no runtime DLLs. All four
 embed the default network (`"$NET"` must stay one quoted argument, or the shell strips the
-quotes the macro needs); with net1 the MinGW build was checked to report the same bench
-as Linux (46577); recheck it against 42410 on the next release.
+quotes the macro needs); the MinGW build reports the same bench as Linux (42410, checked
+for v0.3).
 Publish with `gh release create v<ver> --target <full 40-char sha>` (a short SHA is
 rejected) and attach the five files.
 
