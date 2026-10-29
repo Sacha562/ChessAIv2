@@ -57,6 +57,7 @@ const char* START_FENS[] = {
     "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
     "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
     "8/2P5/8/8/8/8/2p5/K6k w - - 0 1",
+    "8/2p5/3k4/8/8/4K3/5P2/8 w - - 0 1", // central kings: bucket and d/e mirror crossings
 };
 } // namespace
 
@@ -102,6 +103,25 @@ TEST_CASE("a colour-mirrored position evaluates the same for the side to move") 
         nnue::Accumulator accA, accB;
         nnue::refresh(*net, a, accA);
         nnue::refresh(*net, b, accB);
+        CHECK(nnue::evaluate(*net, accA, a) == nnue::evaluate(*net, accB, b));
+    }
+}
+
+TEST_CASE("a file-mirrored position evaluates the same") {
+    // Each perspective mirrors a<->h whenever its king is on files e-h, so a position and
+    // its left-right mirror (no castling rights) present identical features.
+    const auto                                net     = randomNetwork(6);
+    const std::pair<const char*, const char*> pairs[] = {
+        {"8/2p5/3k4/8/8/4K3/5P2/8 w - - 0 1", "8/5p2/4k3/8/8/3K4/2P5/8 w - - 0 1"},
+        {"r4rk1/pp3ppp/2n5/3q4/8/2N5/PP3PPP/R2Q1RK1 b - - 0 15",
+         "1kr4r/ppp3pp/5n2/4q3/8/5N2/PPP3PP/1KR1Q2R b - - 0 15"},
+    };
+    for (const auto& [fen, mirrored] : pairs) {
+        const Board       a(fen), b(mirrored);
+        nnue::Accumulator accA, accB;
+        nnue::refresh(*net, a, accA);
+        nnue::refresh(*net, b, accB);
+        CHECK(accA.values == accB.values);
         CHECK(nnue::evaluate(*net, accA, a) == nnue::evaluate(*net, accB, b));
     }
 }

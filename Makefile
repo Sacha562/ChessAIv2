@@ -15,7 +15,7 @@ SOURCES  := $(wildcard src/*.cpp)
 # NNUE network linked into the binary as the default eval (src/nnue.cpp embeds it with
 # .incbin). OpenBench overrides it with `make EVALFILE=<net>`; the path is made absolute so
 # the assembler finds it. Without the file the build embeds nothing and falls back to the HCE.
-EVALFILE ?= nets/net2.bin
+EVALFILE ?= nets/net3.bin
 ifneq ($(wildcard $(EVALFILE)),)
     DEFS += -DEVALFILE=\"$(abspath $(EVALFILE))\"
 endif

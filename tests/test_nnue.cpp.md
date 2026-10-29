@@ -32,9 +32,10 @@ Also run as part of the commit gate ([run_checks.py.md](../scripts/run_checks.py
 
 ### `incremental updates match a full refresh through random playouts`
 
-From five start positions chosen to reach castling (both sides, both wings), en passant,
-and promotions (with and without capture) early, eight random playouts of up to 120 plies
-each. After every move, the accumulator built by [`update`](../src/nnue.hpp.md#update) from
+From six start positions chosen to reach castling (both sides, both wings), en passant,
+promotions (with and without capture), and king walks across input buckets and across the
+d/e files (which flips a perspective's mirroring, forcing a full rebuild in `update`)
+early, eight random playouts of up to 120 plies each. After every move, the accumulator built by [`update`](../src/nnue.hpp.md#update) from
 the parent must equal a from-scratch [`refresh`](../src/nnue.hpp.md#refresh) of the new
 position, for both perspectives and all 1024 lanes. Over 1000 moves must be checked.
 
@@ -44,6 +45,16 @@ A position and its colour-flipped twin (ranks mirrored, colours swapped, the oth
 move) must give the identical [`evaluate`](../src/nnue.hpp.md#evaluate) score. Run after
 1.e4 and on an Italian-opening middlegame. This pins the perspective mirroring
 (`sq ^ 56`) and the own/theirs feature split.
+
+### `a file-mirrored position evaluates the same`
+
+Each perspective mirrors the board a↔h whenever its king is on files e–h, so a position
+and its left-right mirror (no castling rights, same side to move) must give identical
+accumulators from [`refresh`](../src/nnue.hpp.md#refresh) and the identical
+[`evaluate`](../src/nnue.hpp.md#evaluate) score. Run on a king-and-pawn ending with the
+kings on d6/e3 (mirrored: e6/d3, so both kings swap mirroring) and a middlegame with both
+kings castled short (mirrored: long-side kings). This pins the king-bucket index and the
+file mirroring of `viewOf`.
 
 ### `the output bucket follows the piece count`
 

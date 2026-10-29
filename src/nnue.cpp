@@ -49,8 +49,11 @@ namespace nnue {
 
 namespace {
 constexpr int NUM_SQUARES  = 64;
+constexpr int NUM_FILES    = 8;
+constexpr int HALF_FILES   = NUM_FILES / 2;
 constexpr int THEIR_OFFSET = 6 * NUM_SQUARES; // their pieces follow our six piece blocks
 constexpr int FLIP_RANKS   = 56;              // sq ^ 56 mirrors a1 <-> a8 for Black's view
+constexpr int FLIP_FILES   = 7;               // sq ^ 7 mirrors a1 <-> h1 (king on files e-h)
 constexpr int MAX_PIECES   = 32;
 constexpr int MIN_PIECES   = 2; // the two kings
 // Pieces per output bucket, as bullet's MaterialCount<OUTPUT_BUCKETS> divides them.
@@ -60,21 +63,47 @@ constexpr int PIECES_PER_BUCKET = (MAX_PIECES + OUTPUT_BUCKETS - 1) / OUTPUT_BUC
 constexpr int MAX_OUTPUT_WEIGHT = std::numeric_limits<int16_t>::max() / QA;
 
 // Bytes of real data in a bullet quantised.bin (the file pads this up to 64).
+constexpr int FEATURE_COLUMNS = INPUT_BUCKETS * INPUTS;
+
 constexpr std::streamsize NETWORK_BYTES =
     static_cast<std::streamsize>(sizeof(int16_t)) *
-    (INPUTS * HIDDEN + HIDDEN + OUTPUT_BUCKETS * (2 * HIDDEN + 1));
+    (FEATURE_COLUMNS * HIDDEN + HIDDEN + OUTPUT_BUCKETS * (2 * HIDDEN + 1));
 
-static_assert(offsetof(Network, featureBias) == sizeof(int16_t) * INPUTS * HIDDEN);
-static_assert(offsetof(Network, outputWeights) == sizeof(int16_t) * (INPUTS + 1) * HIDDEN);
+static_assert(offsetof(Network, featureBias) == sizeof(int16_t) * FEATURE_COLUMNS * HIDDEN);
+static_assert(offsetof(Network, outputWeights) == sizeof(int16_t) * (FEATURE_COLUMNS + 1) * HIDDEN);
 static_assert(offsetof(Network, outputBias) ==
-              sizeof(int16_t) * (INPUTS + 1 + 2 * OUTPUT_BUCKETS) * HIDDEN);
+              sizeof(int16_t) * (FEATURE_COLUMNS + 1 + 2 * OUTPUT_BUCKETS) * HIDDEN);
+static_assert(std::ranges::max(KING_BUCKET_LAYOUT) + 1 == INPUT_BUCKETS);
 
 // One input feature before it is indexed for a perspective.
 struct Feature {
     Color     color;
     PieceType type;
     Square    square;
+
+    bool operator==(const Feature&) const = default;
 };
+
+// How one perspective sees the board, fixed by its own king square: the input bucket its
+// king selects (as the first column of that bucket) and the XOR that maps a square into
+// its view (ranks flipped for Black, files mirrored when its king is on files e-h).
+struct View {
+    int bucketOffset = 0;
+    int squareXor    = 0;
+
+    bool operator==(const View&) const = default;
+};
+
+// bullet's ChessBucketsMirrored, for `perspective` with its king on `king`.
+View viewOf(Color perspective, Square king) {
+    const int  rankFlip   = perspective == Color::WHITE ? 0 : FLIP_RANKS;
+    const int  k          = king.index() ^ rankFlip;
+    const int  file       = k % NUM_FILES;
+    const bool mirror     = file >= HALF_FILES;
+    const int  layoutFile = mirror ? NUM_FILES - 1 - file : file;
+    const int  bucket     = KING_BUCKET_LAYOUT[(k / NUM_FILES) * HALF_FILES + layoutFile];
+    return View{bucket * INPUTS, rankFlip ^ (mirror ? FLIP_FILES : 0)};
+}
 
 // The features a move switches on and off: at most two of each (castling moves king
 // and rook; a capture or en passant also removes the victim).
@@ -85,12 +114,12 @@ struct Delta {
     int                    nRemoved = 0;
 };
 
-// Bullet's Chess768 layout, seen from `perspective`: own pieces first, then theirs, each
-// as type * 64 + square, with the board mirrored vertically for Black.
-int featureIndex(Color perspective, const Feature& f) {
+// Bullet's Chess768 layout inside the view's bucket: own pieces first, then theirs, each
+// as type * 64 + square, with the square mapped into the perspective's view.
+int featureIndex(Color perspective, const View& view, const Feature& f) {
     const int side = f.color == perspective ? 0 : THEIR_OFFSET;
-    const int sq   = perspective == Color::WHITE ? f.square.index() : f.square.index() ^ FLIP_RANKS;
-    return side + static_cast<int>(f.type) * NUM_SQUARES + sq;
+    const int sq   = f.square.index() ^ view.squareXor;
+    return view.bucketOffset + side + static_cast<int>(f.type) * NUM_SQUARES + sq;
 }
 
 Delta moveDelta(const Board& board, Move move) {
@@ -120,6 +149,42 @@ Delta moveDelta(const Board& board, Move move) {
     else if (board.at(to) != Piece::NONE)
         d.removed[d.nRemoved++] = Feature{~us, board.at<PieceType>(to), to};
     return d;
+}
+
+// The mover's king square once `d` is made: where an added king lands, else unchanged.
+Square kingAfter(const Board& board, const Delta& d) {
+    for (int i = 0; i < d.nAdded; ++i)
+        if (d.added[i].type == PieceType::KING) return d.added[i].square;
+    return board.kingSq(board.sideToMove());
+}
+
+bool removedBy(const Delta& d, const Feature& f) {
+    return std::any_of(d.removed.begin(), d.removed.begin() + d.nRemoved,
+                       [&f](const Feature& r) { return r == f; });
+}
+
+void addColumn(const Network& net, int column, std::array<int16_t, HIDDEN>& values) {
+    const auto& weights = net.featureWeights[column];
+    for (int i = 0; i < HIDDEN; ++i)
+        values[i] = static_cast<int16_t>(values[i] + weights[i]);
+}
+
+// One perspective's accumulator built from scratch for the position `board` becomes once
+// `d` is made, seen through `view`. With an empty delta this is a plain refresh; after a
+// king move that changes the mover's bucket or mirroring, it replaces the incremental
+// update for that perspective (every column changes).
+void rebuild(const Network& net, const Board& board, const Delta& d, Color perspective,
+             const View& view, std::array<int16_t, HIDDEN>& values) {
+    values            = net.featureBias;
+    Bitboard occupied = board.occ();
+    while (occupied) {
+        const Square  sq    = Square(static_cast<int>(occupied.pop()));
+        const Piece   piece = board.at(sq);
+        const Feature f{piece.color(), piece.type(), sq};
+        if (!removedBy(d, f)) addColumn(net, featureIndex(perspective, view, f), values);
+    }
+    for (int i = 0; i < d.nAdded; ++i)
+        addColumn(net, featureIndex(perspective, view, d.added[i]), values);
 }
 
 // child = parent + sum(added columns) - sum(removed columns). Templated on the counts so
@@ -232,32 +297,32 @@ const Network* embeddedNetwork() {
 }
 
 void refresh(const Network& net, const Board& board, Accumulator& out) {
-    for (const Color perspective : {Color::WHITE, Color::BLACK}) {
-        auto& values      = out.values[static_cast<int>(perspective)];
-        values            = net.featureBias;
-        Bitboard occupied = board.occ();
-        while (occupied) {
-            const Square  sq    = Square(static_cast<int>(occupied.pop()));
-            const Piece   piece = board.at(sq);
-            const Feature f{piece.color(), piece.type(), sq};
-            const auto&   column = net.featureWeights[featureIndex(perspective, f)];
-            for (int i = 0; i < HIDDEN; ++i)
-                values[i] = static_cast<int16_t>(values[i] + column[i]);
-        }
-    }
+    for (const Color perspective : {Color::WHITE, Color::BLACK})
+        rebuild(net, board, Delta{}, perspective, viewOf(perspective, board.kingSq(perspective)),
+                out.values[static_cast<int>(perspective)]);
 }
 
 void update(const Network& net, const Board& board, Move move, const Accumulator& parent,
             Accumulator& child) {
-    const Delta d = moveDelta(board, move);
+    const Delta d     = moveDelta(board, move);
+    const Color mover = board.sideToMove();
     for (const Color perspective : {Color::WHITE, Color::BLACK}) {
-        const int          p = static_cast<int>(perspective);
+        const int  p      = static_cast<int>(perspective);
+        const View before = viewOf(perspective, board.kingSq(perspective));
+        const View after = perspective == mover ? viewOf(perspective, kingAfter(board, d)) : before;
+
+        // The mover's king changed bucket or side: every column moves, so rebuild.
+        if (after != before) {
+            rebuild(net, board, d, perspective, after, child.values[p]);
+            continue;
+        }
+
         std::array<int, 2> add{};
         std::array<int, 2> sub{};
         for (int i = 0; i < d.nAdded; ++i)
-            add[i] = featureIndex(perspective, d.added[i]);
+            add[i] = featureIndex(perspective, before, d.added[i]);
         for (int i = 0; i < d.nRemoved; ++i)
-            sub[i] = featureIndex(perspective, d.removed[i]);
+            sub[i] = featureIndex(perspective, before, d.removed[i]);
 
         if (d.nAdded == 2)
             applyDelta<2, 2>(net, parent.values[p], child.values[p], add, sub);

@@ -18,7 +18,7 @@ is nothing to build for it.
 |------|---------|
 | [CMakeLists.txt](CMakeLists.txt) | Primary build. Broad IDE/tooling support (CLion, VS, VS Code); works with Clang, GCC, and MSVC. |
 | [Makefile](Makefile) | Thin OpenBench-compatible build (`make EXE=<name>` then `<name> bench`). |
-| [nets/net2.bin](nets/net2.bin) | The default NNUE network, embedded into the binary (see [NNUE network](#nnue-network)). Tracked despite the `/nets/*` and `*.bin` ignore rules via a `.gitignore` exception. |
+| [nets/net3.bin](nets/net3.bin) | The default NNUE network, embedded into the binary (see [NNUE network](#nnue-network)). Tracked despite the `/nets/*` and `*.bin` ignore rules via a `.gitignore` exception. |
 
 ## Target
 
@@ -40,7 +40,7 @@ and the tools via their named targets (`make tuner`, `make extract`).
 | PEXT movegen | `USE_PEXT` option (default ON) → `-DCHESS_USE_PEXT` | `-DCHESS_USE_PEXT` |
 | Warnings | `-Wall -Wextra -Wno-unused-parameter` (GCC/Clang) | `-Wall -Wextra -Wno-unused-parameter` |
 | Threads | `find_package(Threads)` → `Threads::Threads` | `-pthread` |
-| Embedded NNUE | `EVALFILE` cache path (default `nets/net2.bin`) → `-DEVALFILE="<abs path>"` on `chessai` and `chessai-tests` | `EVALFILE ?= nets/net2.bin` → `-DEVALFILE="$(abspath $(EVALFILE))"` on every target |
+| Embedded NNUE | `EVALFILE` cache path (default `nets/net3.bin`) → `-DEVALFILE="<abs path>"` on `chessai` and `chessai-tests` | `EVALFILE ?= nets/net3.bin` → `-DEVALFILE="$(abspath $(EVALFILE))"` on every target |
 
 **`CHESS_USE_PEXT`** compiles the library's sliding move generation with BMI2 `pext`
 — fast on Zen 3 / modern Intel (Haswell+). Turn it off on older AMD (microcoded,
@@ -53,18 +53,18 @@ The default eval is the NNUE network embedded into the executable
 ([nnue.hpp.md](src/nnue.hpp.md#the-embedded-network)), so a build needs the net file at
 compile time. Both builds pass its **absolute** path as the `EVALFILE` string macro, and
 `src/nnue.cpp` pulls the bytes in with an assembler `.incbin` (GCC and Clang, Linux and
-MinGW; the binary grows by ~1.6 MB). Only an existing file is embedded; without one the
+MinGW; the binary grows by ~1.6 MB with net3). Only an existing file is embedded; without one the
 build silently falls back to the hand-crafted eval.
 
 ```bash
-make                                   # embeds nets/net2.bin (the default)
+make                                   # embeds nets/net3.bin (the default)
 make EVALFILE=/path/to/other.bin       # OpenBench-style override: embed another net
 cmake -B build -DEVALFILE=/path/to/other.bin
 ```
 
 OpenBench builds with `make EXE=<name> [EVALFILE=<net>]` and checks `<name> bench`; with
-the default net the **bench signature is 42410 nodes** (46577 with net1, 62915 under the
-HCE). CMake
+the default net the **bench signature is 46936 nodes** (42410 with net2, 46577 with
+net1, 62915 under the HCE). CMake
 marks `src/nnue.cpp` as depending on the net, so swapping the file rebuilds it; the
 Makefile always rebuilds everything anyway. An MSVC build embeds nothing (no GNU-style
 top-level `asm`); load a net there with the UCI `EvalFile` option. Training the network is
@@ -149,7 +149,7 @@ same `bench` node count. The base flags use a portable target instead of
 ```bash
 V=0.1d
 BASE="-std=c++20 -O3 -march=x86-64-v3 -funroll-loops -flto -DNDEBUG -Iinclude -Isrc"
-NET="-DEVALFILE=\"$PWD/nets/net2.bin\""   # embedded NNUE; keep "$NET" quoted below
+NET="-DEVALFILE=\"$PWD/nets/net3.bin\""   # embedded NNUE; keep "$NET" quoted below
 clang++                $BASE "$NET"                  src/*.cpp -pthread         -o dist/chessai-$V-linux-avx2
 clang++                $BASE "$NET" -DCHESS_USE_PEXT src/*.cpp -pthread         -o dist/chessai-$V-linux-bmi2
 x86_64-w64-mingw32-g++ $BASE "$NET"                  src/*.cpp -static -pthread -o dist/chessai-$V-windows-avx2.exe
