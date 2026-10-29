@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.3.1 (NNUE, net2, AVX2 inference) · next: time management, net3
+## Status — v0.3.2 (NNUE, net2, stability time management) · next: net3
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.3.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.3.2) | 1d — time management | Stability-based time management: after each iteration the soft time limit grows when the best move is contested (it took a small share of the search, or just changed) and shrinks when it is settled: **+30.3 Elo** vs v0.3.1 |
 | [v0.3.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.3.1) | 2 — speed | Hand-written AVX2 output layer for the NNUE ("lizard" SCReLU: `vpmullw` + `vpmaddwd`, 16 lanes per step): evaluate 2.3× faster, search +20% nps, identical scores: **+25.6 Elo** vs v0.3 |
 | [v0.3](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.3) | 2 — NNUE (net2) | Second net: `(768→1024)×2` SCReLU with 8 material output buckets, trained on 400M self-play positions (100M HCE + 300M net1 games): **+201.9 Elo** vs v0.2.1 |
 | [v0.2.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.2.1) | 2 — fix | Extension budget: check/singular extensions no longer stack and stop past ply 2×depth, so long checking lines (queen endgames) finish iterations and mate instead of shuffling (KQvK 0/8 → 7/8 mated); **+8.5 Elo** vs v0.2 |
