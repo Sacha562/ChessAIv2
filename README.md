@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.4 (NNUE, net3 on Stockfish-labelled data) · next: net3 on all relabelled data
+## Status — v0.5 (NNUE, net4 on all-Stockfish-labelled data) · next: width and king buckets on the larger data set
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.5](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5) | 2 — NNUE (net4) | Fourth net: same shape, trained only on Stockfish scores (all 414M self-play positions rescored by Stockfish 19 at 5,000 nodes): **+55.7 Elo** vs v0.4 |
 | [v0.4](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.4) | 2 — NNUE (net3) | Third net: net2's shape trained on Stockfish-labelled data (114M positions of net2 self-play rescored by Stockfish 19 at 5,000 nodes, plus 300M net1 self-play positions): **+54.9 Elo** vs v0.3.2 |
 | [v0.3.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.3.2) | 1d — time management | Stability-based time management: after each iteration the soft time limit grows when the best move is contested (it took a small share of the search, or just changed) and shrinks when it is settled: **+30.3 Elo** vs v0.3.1 |
 | [v0.3.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.3.1) | 2 — speed | Hand-written AVX2 output layer for the NNUE ("lizard" SCReLU: `vpmullw` + `vpmaddwd`, 16 lanes per step): evaluate 2.3× faster, search +20% nps, identical scores: **+25.6 Elo** vs v0.3 |
@@ -229,7 +230,7 @@ src/nnue.*              NNUE evaluation: embedded net, incremental accumulators
 src/eval.*              hand-crafted tapered evaluation (EvalParams), the fallback
 src/datagen.*           self-play training-data generator (chessai datagen)
 src/viriformat.*        viriformat game encoder for the bullet trainer
-nets/net3.bin           default NNUE network, embedded at build time
+nets/net4.bin           default NNUE network, embedded at build time
 src/tt.*                transposition table (bucketed, aged, lock-less)
 src/uci.*               UCI command loop and options
 src/perft.*             perft + correctness suite
