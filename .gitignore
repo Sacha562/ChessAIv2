@@ -22,7 +22,7 @@ chessai
 /syzygy/
 *.bin
 # ...except the NNUE network the build embeds as the default eval
-!/nets/net3.bin
+!/nets/net4.bin
 
 # Match testing (scripts/match.py): built version binaries, opening suites, PGNs
 /bin/

@@ -44,7 +44,7 @@ add_executable(extract tools/extract.cpp)
 target_include_directories(extract PRIVATE include src)
 
 # --- Embedded NNUE network (the default eval; src/nnue.cpp links it in with .incbin) ---
-set(EVALFILE "${CMAKE_CURRENT_SOURCE_DIR}/nets/net3.bin" CACHE FILEPATH
+set(EVALFILE "${CMAKE_CURRENT_SOURCE_DIR}/nets/net4.bin" CACHE FILEPATH
     "NNUE network linked into the binary")
 if(EXISTS "${EVALFILE}")
     target_compile_definitions(chessai PRIVATE EVALFILE="${EVALFILE}")

@@ -55,7 +55,7 @@ back **+20% nps**.
 
 The default network is linked into the executable so the engine is one self-contained
 file ([PLAN.md](../PLAN.md) §0.4). The build passes its absolute path as the `EVALFILE`
-string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net3.bin`
+string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net4.bin`
 (OpenBench overrides it with `make EVALFILE=<net>`), and CMake has an `EVALFILE` cache path.
 A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 (`.rodata` on ELF, `.rdata` on Windows/COFF), 64-byte aligned, between two global labels.
@@ -64,15 +64,16 @@ A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 releases has no `#embed` (and Clang only offers it as an extension). MSVC has no GNU-style
 top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
 `embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
-file. The default network is `nets/net3.bin`, committed to the repository
-(1,607,744 bytes, SHA-256 `6a03098c…3d16311e`); the **bench signature with it is 46936
-nodes** (42410 with net2). net3 keeps net2's shape and changes the training data: its
-targets are **Stockfish scores**. The generation-3 self-play positions (run3: 114M
-positions of net2 self-play) were rescored by Stockfish 19 at 5,000 nodes each, scaled
-by 1.25 onto the engine's centipawn scale, and counted twice; run2 (300M, net1 self-play)
-was added with its own search scores. 60 superbatches took 1 h 11 min on the RX 6800 XT
-(final loss 0.0117). A 1536-wide net with 10 king buckets, trained on net2's own data, lost
-Elo and was not shipped.
+file. The default network is `nets/net4.bin`, committed to the repository
+(1,607,744 bytes, SHA-256 `fd6c942c…f6168a`); the **bench signature with it is 35830
+nodes** (46936 with net3, 42410 with net2). net4 keeps net2's shape and trains only on
+**Stockfish scores**: all 414M self-play positions were rescored by Stockfish 19 at
+5,000 nodes each and scaled by 1.25 onto the engine's centipawn scale. The generation-3
+positions (run3: 114M positions of net2 self-play) are counted twice, run2 (300M, net1
+self-play) once. 100 superbatches took 1 h 27 min on the RX 6800 XT (final loss 0.0120).
+net3, its predecessor, had Stockfish scores for run3 only and kept run2's own search
+scores. A 1536-wide net with 10 king buckets, trained on net2's own data, lost Elo and was
+not shipped.
 
 ## The network
 
@@ -122,11 +123,11 @@ an affine layer's weights the other way round, so the trainer saves them with
 `SavedFormat::id("l1w")…transpose()`; without it the engine would read scrambled rows.
 
 The engine's integer eval tracks the trainer's float eval to within quantisation error.
-For net3 on startpos, either queen missing, an Italian opening, KQ vs K (bucket 0), both
+For net4 on startpos, either queen missing, an Italian opening, KQ vs K (bucket 0), both
 sides castled short, opposite castling (Black to move) and a king-and-pawn ending with the
 kings on g3 / b6 (the last three exercise the a↔h mirroring) the engine gives
-`44 / 1646 / −1562 / 63 / 461 / 35 / 173 / −14` cp against the trainer's
-`36.5 / 1636.9 / −1573.3 / 58.4 / 459.9 / 38.5 / 171.6 / −14.8`.
+`45 / 1611 / −1528 / 67 / 295 / 49 / 183 / −23` cp against the trainer's
+`38.3 / 1617.0 / −1545.9 / 56.8 / 288.6 / 40.1 / 176.6 / −25.3`.
 
 ## Objects / Interfaces
 
@@ -279,7 +280,7 @@ with that bucket's `outputWeights` row, adds its bias, and rescales (see
 
 - **AVX2 build (the "lizard" SCReLU).** With `v = clamp(x, 0, QA)`, the product `v · w`
   fits `int16` because every output weight is within `±MAX_OUTPUT_WEIGHT = 32767 / QA = 128`
-  (bullet clips them to about ±127; net2 and net3 both span exactly ±127). So `vpmullw` forms `v · w`
+  (bullet clips them to about ±127; net2, net3 and net4 all span exactly ±127). So `vpmullw` forms `v · w`
   16 lanes at a time, and `vpmaddwd` multiplies by `v` again and adds lane pairs into
   `int32`. The result is exactly `v² · w`, without the 8-lane `vpmulld` the plain form
   needs. `horizontalSum` folds the eight `int32` lanes at the end. Measured on the 5900X:
