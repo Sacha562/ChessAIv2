@@ -63,7 +63,7 @@ cmake -B build -DEVALFILE=/path/to/other.bin
 ```
 
 OpenBench builds with `make EXE=<name> [EVALFILE=<net>]` and checks `<name> bench`; with
-the default net the **bench signature is 35830 nodes** (46936 with net3, 42410 with net2, 46577 with
+the default net the **bench signature is 34410 nodes** (35830 before the v0.5.1 search re-tune, 46936 with net3, 42410 with net2, 46577 with
 net1, 62915 under the HCE). CMake
 marks `src/nnue.cpp` as depending on the net, so swapping the file rebuilds it; the
 Makefile always rebuilds everything anyway. An MSVC build embeds nothing (no GNU-style

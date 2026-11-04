@@ -131,7 +131,7 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `tmNodeScale` | `int` | `174` | Node-fraction multiplier, ×100 (`TmNodeScale`, 50–400). With the defaults: `f = 0.5` → ×1.79, `f = 0.9` → ×1.10, `f = 1` → ×0.92. |
 | `tmStability` | `std::array<int, 5>` | `{238, 129, 107, 91, 71}` | Best-move stability multipliers, ×100, indexed by the number of completed iterations the best move has held (capped at 4): a new best move gets ×2.38, one held 4+ iterations ×0.71 (`TmStab0`–`TmStab4`, 10–500). Defaults are Alexandria's SPSA-tuned values. |
 | `tempo` | `Value` | `9` | Side-to-move bonus (cp) passed to [`evaluate`](eval.hpp.md#evaluate). |
-| `deltaMargin` | `Value` | `203` | Q-search delta-pruning safety cushion (cp). |
+| `deltaMargin` | `Value` | `281` | Q-search delta-pruning safety cushion (cp). |
 | `endgamePieces` | `int` | `7` | Total piece count at/below which delta pruning switches off. |
 | `useKillers` | `bool` | `true` | Enable the killer-move ordering signal (`UseKillers`). |
 | `useHistory` | `bool` | `true` | Enable the butterfly-history ordering signal (`UseHistory`). |
@@ -152,20 +152,20 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useCaptureHist` | `bool` | **`false`** | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. **+2.3 ± 5.7 Elo** — neutral, so it ships off (see the Phase 1d rationale below). |
 | `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
 | `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
-| `aspirationDelta` | `Value` | `15` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
-| `lmrBase` | `int` | `63` | LMR reduction offset ×100 (`LmrBase`); `0.63` in the curve. |
-| `lmrDivisor` | `int` | `142` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.42` in the curve (kept ≥ 1). |
-| `nmpBase` | `int` | `1` | Null-move base reduction `R` (`NmpBase`). |
-| `nmpEvalDiv` | `int` | `168` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
-| `rfpMargin` | `Value` | `68` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
-| `futMargin` | `Value` | `79` | Futility margin per remaining ply, cp (`FutMargin`). |
-| `futBase` | `Value` | `73` | Futility base margin, cp (`FutBase`). |
-| `lmpBase` | `int` | `4` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
-| `singularMinDepth` | `int` | `7` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
-| `singularMargin` | `int` | `1` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
-| `singularDoubleMargin` | `int` | `46` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
+| `aspirationDelta` | `Value` | `13` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
+| `lmrBase` | `int` | `55` | LMR reduction offset ×100 (`LmrBase`); `0.55` in the curve. |
+| `lmrDivisor` | `int` | `152` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.52` in the curve (kept ≥ 1). |
+| `nmpBase` | `int` | `2` | Null-move base reduction `R` (`NmpBase`). |
+| `nmpEvalDiv` | `int` | `150` | Null-move eval-margin divisor (`NmpEvalDiv`) — cp of `eval − beta` per extra ply of `R`. |
+| `rfpMargin` | `Value` | `42` | Reverse-futility margin per remaining ply, cp (`RfpMargin`). |
+| `futMargin` | `Value` | `90` | Futility margin per remaining ply, cp (`FutMargin`). |
+| `futBase` | `Value` | `61` | Futility base margin, cp (`FutBase`). |
+| `lmpBase` | `int` | `6` | Late-move-pruning quiet-count base (`LmpBase`); count `= base + depth²`. |
+| `singularMinDepth` | `int` | `6` | Min depth to attempt a singular extension; the TT entry must also be this deep (`SingularMinDepth`). |
+| `singularMargin` | `int` | `2` | Singular-beta offset per ply: `singularBeta = ttValue − singularMargin·depth` cp (`SingularMargin`). |
+| `singularDoubleMargin` | `int` | `44` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
 | `histPruneMargin` | `int` | `2048` | History-pruning threshold per remaining ply (`HistPruneMargin`): a late quiet scoring below `−histPruneMargin·depth` is skipped. History-score units, not cp. |
-| `histLmrDiv` | `int` | `7512` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
+| `histLmrDiv` | `int` | `6546` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
 | `razorBase` | `Value` | `180` | Razoring base margin, cp (`RazorBase`). |
 | `razorMargin` | `Value` | `160` | Razoring margin per remaining ply, cp (`RazorMargin`); the gate is `eval + razorBase + razorMargin·depth <= alpha`. |
 | `probCutMinDepth` | `int` | `5` | Minimum depth at which ProbCut is attempted (`ProbCutMinDepth`). |
@@ -184,6 +184,15 @@ curve were **re-tuned a third time** (OpenBench, 7 params: `lmrBase`, `lmrDiviso
 `nmpEvalDiv`, `rfpMargin`, `futMargin`, `futBase`, `histLmrDiv`; 45k games @ STC 10+0.1).
 The result — more LMR, slightly tighter futility, `rfpMargin` unchanged — beat the previous
 defaults by **+6.1 ± 4.3 Elo** (9476 games, SPRT `[0, 5]` accepted @ LTC 40+0.4).
+After the switch to NNUE (v0.5, net4) every margin was still fitted to the HCE eval, so all
+fourteen search knobs were **re-tuned a fourth time** (OpenBench, `lmrBase`, `lmrDivisor`,
+`nmpBase`, `nmpEvalDiv`, `rfpMargin`, `futMargin`, `futBase`, `lmpBase`, `histLmrDiv`,
+`aspirationDelta`, `deltaMargin` and the three singular knobs; 64k games @ STC 10+0.1).
+This time the values moved a lot — much tighter reverse futility (`68 → 42`), a looser
+q-search delta cushion (`203 → 281`), a deeper null-move base (`1 → 2`), more quiets kept
+before late-move pruning (`4 → 6`), singular extensions one ply shallower with a wider
+margin — and the set beat the v0.5 defaults by **+34.3 ± 10.3 Elo** (1208 games, SPRT
+`[0, 5]` accepted @ LTC 40+0.4).
 Only the margins are tunable; the structural gates (min depths, `LMR_MIN_MOVES`, etc.) stay
 `constexpr`. `lmrBase` / `lmrDivisor` are integer-scaled ×100 because the tuner works in
 integers; they are divided when the LMR table is (re)built
@@ -201,7 +210,7 @@ search reproduces the plain PVS + step-1-ordering engine.
 The **Phase 1d knobs** (`useHistPrune` / `histPruneMargin`, `useHistLmr` / `histLmrDiv`)
 are denominated in **history-score units**, not centipawns: the quiet score they read is
 the butterfly + continuation sum, which lives in `±(1 + CONT_PLIES) · MAX_HISTORY`
-(`±49152`). `histLmrDiv` is SPSA-tuned (`8192` seed → `7512`); `histPruneMargin` stays a
+(`±49152`). `histLmrDiv` is SPSA-tuned (`8192` seed → `7512` on the HCE → `6546` on NNUE); `histPruneMargin` stays a
 seed, since history pruning ships off; the depth gate `HIST_PRUNE_MAX_DEPTH` and
 the `HIST_LMR_MAX_PLIES` cap stay `constexpr`.
 

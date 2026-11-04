@@ -65,8 +65,8 @@ releases has no `#embed` (and Clang only offers it as an extension). MSVC has no
 top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
 `embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
 file. The default network is `nets/net4.bin`, committed to the repository
-(1,607,744 bytes, SHA-256 `fd6c942c…f6168a`); the **bench signature with it is 35830
-nodes** (46936 with net3, 42410 with net2). net4 keeps net2's shape and trains only on
+(1,607,744 bytes, SHA-256 `fd6c942c…f6168a`); the **bench signature with it is 34410
+nodes** since the v0.5.1 search re-tune (35830 before it; 46936 with net3, 42410 with net2). net4 keeps net2's shape and trains only on
 **Stockfish scores**: all 414M self-play positions were rescored by Stockfish 19 at
 5,000 nodes each and scaled by 1.25 onto the engine's centipawn scale. The generation-3
 positions (run3: 114M positions of net2 self-play) are counted twice, run2 (300M, net1

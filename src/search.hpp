@@ -72,7 +72,7 @@ struct Tunables {
     Value tempo = 9; // side-to-move bonus (centipawns)
 
     // Quiescence delta pruning.
-    Value deltaMargin   = 203; // delta-pruning safety cushion (centipawns)
+    Value deltaMargin   = 281; // delta-pruning safety cushion (centipawns)
     int   endgamePieces = 7;   // total pieces at/below which delta pruning is off
 
     // Ordering-heuristic on/off toggles, all defaulted from A/B self-play. Killers
@@ -123,25 +123,25 @@ struct Tunables {
     bool useProbCut  = false; // shallow capture search predicting a deep fail-high
 
     // Aspiration: initial half-window (cp) around the previous iteration's score.
-    Value aspirationDelta = 15;
+    Value aspirationDelta = 13;
 
     // Phase 1b forward-pruning margins (first-cut; SPSA-tunable via UCI). LMR base and
     // divisor are stored x100 (integer knobs for the tuner) and divided when the LMR
     // reduction table is built. Structural gates (min depths, move counts) stay
     // constexpr in search.cpp.
-    int   lmrBase    = 63;  // LMR reduction offset, x100 (0.63)
-    int   lmrDivisor = 142; // LMR ln*ln divisor,  x100 (1.42); must stay >= 1
-    int   nmpBase    = 1;   // null-move base reduction R
-    int   nmpEvalDiv = 168; // null-move eval-margin divisor (cp of eval over beta per +1 R)
-    Value rfpMargin  = 68;  // reverse-futility margin per remaining ply (cp)
-    Value futMargin  = 79;  // futility margin per remaining ply (cp)
-    Value futBase    = 73;  // futility base margin (cp)
-    int   lmpBase    = 4;   // late-move-pruning quiet-count base (count = base + depth^2)
+    int   lmrBase    = 55;  // LMR reduction offset, x100 (0.55)
+    int   lmrDivisor = 152; // LMR ln*ln divisor,  x100 (1.52); must stay >= 1
+    int   nmpBase    = 2;   // null-move base reduction R
+    int   nmpEvalDiv = 150; // null-move eval-margin divisor (cp of eval over beta per +1 R)
+    Value rfpMargin  = 42;  // reverse-futility margin per remaining ply (cp)
+    Value futMargin  = 90;  // futility margin per remaining ply (cp)
+    Value futBase    = 61;  // futility base margin (cp)
+    int   lmpBase    = 6;   // late-move-pruning quiet-count base (count = base + depth^2)
 
     // Phase 1d history-selectivity knobs, in history-score units (the quiet band is
     // +/-(1 + CONT_PLIES) * MAX_HISTORY = +/-49152).
     int histPruneMargin = 2048; // skip a late quiet scoring below -margin * depth
-    int histLmrDiv      = 7512; // history score per one ply of LMR adjustment (>= 1)
+    int histLmrDiv      = 6546; // history score per one ply of LMR adjustment (>= 1)
 
     // Phase 1d whole-node pruning margins (cp).
     Value razorBase       = 180; // razoring base margin
@@ -152,9 +152,9 @@ struct Tunables {
     // Singular-extension knobs (Phase 1c). The TT move is verified singular by a
     // reduced-depth search (excluding it) against a lowered beta; if every alternative
     // fails below that beta, the TT move is extended.
-    int singularMinDepth     = 7;  // only attempt at/above this depth (TT must be this deep)
-    int singularMargin       = 1;  // singularBeta = ttValue - singularMargin * depth (cp/ply)
-    int singularDoubleMargin = 46; // extra ply when the verification fails this far under (cp)
+    int singularMinDepth     = 6;  // only attempt at/above this depth (TT must be this deep)
+    int singularMargin       = 2;  // singularBeta = ttValue - singularMargin * depth (cp/ply)
+    int singularDoubleMargin = 44; // extra ply when the verification fails this far under (cp)
 };
 
 // A single search worker. Iterative deepening over a fail-soft Principal Variation

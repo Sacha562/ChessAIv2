@@ -108,7 +108,7 @@ losses to wins once LMP/LMR existed to consume them: history −23 → +247, IIR
 material-only eval but +7 ± 8 Elo once the full HCE eval landed), and the pruning /
 reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`,
 `UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
-`1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `15`, the initial aspiration half-window in
+`1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `13`, the initial aspiration half-window in
 cp), the **Phase 1d history-selectivity toggles** `UseHistLmr` and `UseCorrHist`
 ([correction history](corrhist.hpp.md) — the learned pawn-structure static-eval adjustment),
 both default `1`, `UseHistPrune` (default **`0`** — A/B-neutral at margins 2048 and 1024), and `UseCapHist` ([capture history](history.hpp.md#historycapturescore)
@@ -119,7 +119,7 @@ margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
 `NmpEvalDiv`, `RfpMargin`, `FutMargin` / `FutBase`, and `LmpBase`, the **Phase 1c
 singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, and the
 **Phase 1d history knobs** `HistPruneMargin` (default `2048`) / `HistLmrDiv` (default
-`7512`, SPSA-tuned), which are in **history-score units** (the quiet band is `±49152`), not
+`6546`, SPSA-tuned), which are in **history-score units** (the quiet band is `±49152`), not
 centipawns, and the **Phase 1d whole-node pruning margins** `RazorBase` (`180`) /
 `RazorMargin` (`160`) / `ProbCutMinDepth` (`5`) / `ProbCutMargin` (`180`) in cp — all exposed
 as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
@@ -128,10 +128,12 @@ the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eva
 singular knobs, 96k games @ STC), which beat the Phase 1b defaults by **+26.2 ± 10 Elo**
 (SPRT accepted @ LTC 40+0.4), and re-tuned once more after Phase 1d (`LmrBase`, `LmrDivisor`,
 `NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `HistLmrDiv` on the correction-history
-eval; **+6.1 ± 4.3 Elo** @ LTC 40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
+eval; **+6.1 ± 4.3 Elo** @ LTC 40+0.4), and re-tuned for NNUE in v0.5.1 (all fourteen
+search knobs, `AspirationDelta` and `DeltaMargin` included; **+34.3 ± 10.3 Elo** @ LTC
+40+0.4). `NmpBase` and `LmpBase` advertise `min 0` (not `1`): both
 **railed at the old floor of `1`** in the Phase 1b tune, so the floor was relaxed to `0` for
-the re-tune — which then settled `LmpBase` at `4` and kept `NmpBase` at `1` (neither wanted
-below 1). `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
+the re-tune — which settled `LmpBase` at `4` and kept `NmpBase` at `1` (neither wanted
+below 1); the NNUE re-tune then raised them to `6` and `2`. `NmpBase 0` still yields a null-move reduction `R ≥ 1` (the `depth/NMP_DIV`
 term dominates at `depth ≥ NMP_MIN_DEPTH`); `LmpBase 0` is a pure `depth²` quiet count, and
 move 1 is never pruned (`moveCount > 1` guard). Each is advertised in the `uci` reply as
 a `spin` option so a self-play tuner (SPSA) can perturb it without a rebuild, and each
