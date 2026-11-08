@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.5.1 (NNUE net4 + search re-tuned for NNUE) · next: width and king buckets on the larger data set
+## Status — v0.6 (NNUE net5, a fourth generation of self-play data) · next: width and king buckets on the 714M positions
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.6](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6) | 2 — NNUE (net5) | Fifth net: same shape, with 300M new positions of net4 self-play added to the training data (714M positions in all, every one rescored by Stockfish 19 at 5,000 nodes) and 60% longer training: **+76.2 Elo** vs v0.5.1 |
 | [v0.5.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5.1) | 1d — search tune | All fourteen search margins re-tuned for the NNUE eval (they were last tuned on the hand-crafted eval): much tighter reverse futility, a looser q-search delta cushion, deeper null-move reductions, earlier singular extensions: **+34.3 Elo** vs v0.5 at 40+0.4 |
 | [v0.5](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5) | 2 — NNUE (net4) | Fourth net: same shape, trained only on Stockfish scores (all 414M self-play positions rescored by Stockfish 19 at 5,000 nodes): **+55.7 Elo** vs v0.4 |
 | [v0.4](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.4) | 2 — NNUE (net3) | Third net: net2's shape trained on Stockfish-labelled data (114M positions of net2 self-play rescored by Stockfish 19 at 5,000 nodes, plus 300M net1 self-play positions): **+54.9 Elo** vs v0.3.2 |
@@ -231,7 +232,7 @@ src/nnue.*              NNUE evaluation: embedded net, incremental accumulators
 src/eval.*              hand-crafted tapered evaluation (EvalParams), the fallback
 src/datagen.*           self-play training-data generator (chessai datagen)
 src/viriformat.*        viriformat game encoder for the bullet trainer
-nets/net4.bin           default NNUE network, embedded at build time
+nets/net5.bin           default NNUE network, embedded at build time
 src/tt.*                transposition table (bucketed, aged, lock-less)
 src/uci.*               UCI command loop and options
 src/perft.*             perft + correctness suite
