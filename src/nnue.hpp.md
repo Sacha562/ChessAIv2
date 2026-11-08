@@ -55,7 +55,7 @@ back **+20% nps**.
 
 The default network is linked into the executable so the engine is one self-contained
 file ([PLAN.md](../PLAN.md) §0.4). The build passes its absolute path as the `EVALFILE`
-string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net4.bin`
+string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net5.bin`
 (OpenBench overrides it with `make EVALFILE=<net>`), and CMake has an `EVALFILE` cache path.
 A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 (`.rodata` on ELF, `.rdata` on Windows/COFF), 64-byte aligned, between two global labels.
@@ -64,16 +64,17 @@ A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 releases has no `#embed` (and Clang only offers it as an extension). MSVC has no GNU-style
 top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
 `embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
-file. The default network is `nets/net4.bin`, committed to the repository
-(1,607,744 bytes, SHA-256 `fd6c942c…f6168a`); the **bench signature with it is 34410
-nodes** since the v0.5.1 search re-tune (35830 before it; 46936 with net3, 42410 with net2). net4 keeps net2's shape and trains only on
-**Stockfish scores**: all 414M self-play positions were rescored by Stockfish 19 at
-5,000 nodes each and scaled by 1.25 onto the engine's centipawn scale. The generation-3
-positions (run3: 114M positions of net2 self-play) are counted twice, run2 (300M, net1
-self-play) once. 100 superbatches took 1 h 27 min on the RX 6800 XT (final loss 0.0120).
-net3, its predecessor, had Stockfish scores for run3 only and kept run2's own search
-scores. A 1536-wide net with 10 king buckets, trained on net2's own data, lost Elo and was
-not shipped.
+file. The default network is `nets/net5.bin`, committed to the repository
+(1,607,744 bytes, SHA-256 `0bc4b339…0827776a`); the **bench signature with it is 31508
+nodes** (34410 with net4 after the v0.5.1 search re-tune, 35830 before it; 46936 with
+net3, 42410 with net2). net5 keeps net2's shape and, like net4, trains only on
+**Stockfish scores** (Stockfish 19 at 5,000 nodes per position, scaled by 1.25 onto the
+engine's centipawn scale). It adds a fourth generation of self-play: run4, 300M positions
+of net4 self-play (v0.5.1 search), counted once, next to run3 (114M, net2 self-play)
+counted twice and run2 (300M, net1 self-play) once, 714M distinct positions. 160
+superbatches took 2 h 18 min on the RX 6800 XT (final loss 0.0120). net4, its
+predecessor, trained on run2 and run3 only, for 100 superbatches. A 1536-wide net with 10
+king buckets, trained on net2's own data, lost Elo and was not shipped.
 
 ## The network
 
@@ -123,11 +124,11 @@ an affine layer's weights the other way round, so the trainer saves them with
 `SavedFormat::id("l1w")…transpose()`; without it the engine would read scrambled rows.
 
 The engine's integer eval tracks the trainer's float eval to within quantisation error.
-For net4 on startpos, either queen missing, an Italian opening, KQ vs K (bucket 0), both
+For net5 on startpos, either queen missing, an Italian opening, KQ vs K (bucket 0), both
 sides castled short, opposite castling (Black to move) and a king-and-pawn ending with the
 kings on g3 / b6 (the last three exercise the a↔h mirroring) the engine gives
-`45 / 1611 / −1528 / 67 / 295 / 49 / 183 / −23` cp against the trainer's
-`38.3 / 1617.0 / −1545.9 / 56.8 / 288.6 / 40.1 / 176.6 / −25.3`.
+`34 / 1638 / −1564 / 48 / 207 / 37 / 175 / −64` cp against the trainer's
+`39.4 / 1636.7 / −1554.3 / 46.8 / 201.2 / 42.9 / 190.9 / −65.3`.
 
 ## Objects / Interfaces
 
@@ -280,7 +281,7 @@ with that bucket's `outputWeights` row, adds its bias, and rescales (see
 
 - **AVX2 build (the "lizard" SCReLU).** With `v = clamp(x, 0, QA)`, the product `v · w`
   fits `int16` because every output weight is within `±MAX_OUTPUT_WEIGHT = 32767 / QA = 128`
-  (bullet clips them to about ±127; net2, net3 and net4 all span exactly ±127). So `vpmullw` forms `v · w`
+  (bullet clips them to about ±127; net2 to net5 all span exactly ±127). So `vpmullw` forms `v · w`
   16 lanes at a time, and `vpmaddwd` multiplies by `v` again and adds lane pairs into
   `int32`. The result is exactly `v² · w`, without the 8-lane `vpmulld` the plain form
   needs. `horizontalSum` folds the eight `int32` lanes at the end. Measured on the 5900X:
