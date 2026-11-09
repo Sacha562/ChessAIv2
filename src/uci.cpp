@@ -246,6 +246,18 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.useRazoring = std::clamp(std::stoi(value), 0, 1) != 0;
         } else if (name == "UseProbCut" && !value.empty()) {
             tunables_.useProbCut = std::clamp(std::stoi(value), 0, 1) != 0;
+        }
+        // Correction-history table weights, percent (SPSA-tunable; 0 = table off).
+        else if (name == "CorrPawnWeight" && !value.empty()) {
+            tunables_.corrPawnWeight = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "CorrNonPawnWeight" && !value.empty()) {
+            tunables_.corrNonPawnWeight = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "CorrMinorWeight" && !value.empty()) {
+            tunables_.corrMinorWeight = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "CorrMajorWeight" && !value.empty()) {
+            tunables_.corrMajorWeight = std::clamp(std::stoi(value), 0, 400);
+        } else if (name == "CorrContWeight" && !value.empty()) {
+            tunables_.corrContWeight = std::clamp(std::stoi(value), 0, 400);
         } else if (name == "AspirationDelta" && !value.empty()) {
             tunables_.aspirationDelta = std::clamp(std::stoi(value), 1, 500);
         }
@@ -344,6 +356,11 @@ void Engine::loop() {
                       << "option name UseCapHist type spin default 0 min 0 max 1\n"
                       << "option name UseRazoring type spin default 0 min 0 max 1\n"
                       << "option name UseProbCut type spin default 0 min 0 max 1\n"
+                      << "option name CorrPawnWeight type spin default 100 min 0 max 400\n"
+                      << "option name CorrNonPawnWeight type spin default 100 min 0 max 400\n"
+                      << "option name CorrMinorWeight type spin default 100 min 0 max 400\n"
+                      << "option name CorrMajorWeight type spin default 100 min 0 max 400\n"
+                      << "option name CorrContWeight type spin default 100 min 0 max 400\n"
                       << "option name AspirationDelta type spin default 13 min 1 max 500\n"
                       << "option name LmrBase type spin default 55 min 0 max 200\n"
                       << "option name LmrDivisor type spin default 152 min 50 max 500\n"

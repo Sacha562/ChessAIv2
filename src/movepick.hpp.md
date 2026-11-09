@@ -102,7 +102,8 @@ for quiet cutoffs).
 
 ### `orderCaptures`
 
-Order a **quiescence** node's capture list in place by [`mvvLva`](#mvvlva) only. No
+Order a **quiescence** node's capture list in place by [`mvvLva`](#mvvlva), with the TT
+move first when it is one of the captures (scored `SCORE_TT`). No
 SEE split is applied — the q-search prunes losing captures itself (via `seeGE`) before
 searching them, so a second SEE pass here would be wasted work.
 
@@ -111,6 +112,7 @@ searching them, so a second SEE pass here would be wasted work.
 |------|------|-------------|
 | `board` | `const Board&` | Position the captures belong to. |
 | `moves` | `chess::Movelist&` | The generated captures; reordered in place (in/out). |
+| `ttMove` | `Move` | The q-search node's TT move (default `Move::NO_MOVE`); placed first when present in `moves`. A quiet TT move from a main-search entry is simply not in the list. ProbCut passes none. |
 
 **Side Effects:** reorders `moves`.
 

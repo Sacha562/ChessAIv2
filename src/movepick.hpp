@@ -33,8 +33,9 @@ struct ContHistContext;
 void orderMoves(const Board& board, chess::Movelist& moves, Move ttMove, const History& hist,
                 int ply, Move prevMove, const ContHistContext& contCtx);
 
-// Order a quiescence node's capture list in place by MVV-LVA. No SEE split is
-// applied — the q-search prunes losing captures itself before searching them.
-void orderCaptures(const Board& board, chess::Movelist& moves);
+// Order a quiescence node's capture list in place by MVV-LVA, with `ttMove` (when it is
+// in the list) first. No SEE split is applied — the q-search prunes losing captures
+// itself before searching them.
+void orderCaptures(const Board& board, chess::Movelist& moves, Move ttMove = Move(Move::NO_MOVE));
 
 } // namespace engine

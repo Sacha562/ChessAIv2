@@ -251,7 +251,7 @@ when capture history is disabled.
 **Warnings:** killers, countermoves, butterfly and continuation history are deliberately
 **not** touched — those tiers exist to order quiets, and feeding captures into them would
 corrupt both. Only main-search cutoffs update the table; q-search orders captures with
-[`orderCaptures`](movepick.hpp.md#ordercaptures) (plain MVV-LVA) and neither reads nor
+[`orderCaptures`](movepick.hpp.md#ordercaptures) (TT move, then plain MVV-LVA) and neither reads nor
 writes capture history.
 
 **Warnings (quiet tables):** both the butterfly and continuation updates are **gravity** updates —

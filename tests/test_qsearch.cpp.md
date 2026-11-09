@@ -5,7 +5,8 @@ move ordering, exercised end-to-end through the public [`Searcher`](../src/searc
 Quiescence exposes no score accessor, so it is validated by the **move a fixed-depth
 search makes**: it must grab free material, must **not** walk into a capture that
 loses to the recapture (the horizon effect q-search exists to cure), and must still
-find a forced mate. Every case is deterministic — fixed depth, single thread, a fresh
+find a forced mate. One case also checks that q-search writes its verdict into the shared
+transposition table. Every case is deterministic — fixed depth, single thread, a fresh
 transposition table, no clock.
 
 ## Test Code
@@ -52,3 +53,11 @@ A depth-2 search plays `e4xd5`, capturing the undefended knight.
 
 `Ra1-a8#` (the king boxed in by its own pawns) is found — a guard that adding
 quiescence + ordering did not break mate detection.
+
+### `q-search results are stored in the shared TT`
+
+After a depth-1 search from the hanging-queen position, the position after `e4xd5` —
+reached only by q-search at ply 1 — is in the TT at depth `0` (`QS_TT_DEPTH`, below every
+main-search store) with a cached static eval (not `VALUE_NONE`). Guards the q-search TT
+store and its depth contract (see
+[`Searcher::qsearch`](../src/search.hpp.md#searcherqsearch)).

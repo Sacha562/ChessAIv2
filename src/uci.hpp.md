@@ -110,8 +110,11 @@ reduction / extension toggles `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseL
 `UseCheckExt` (all default `1`), `UseSingular` (Phase 1c singular extensions, **default
 `1`** — a +24-Elo gainer vs 0.1b), and `UseAspiration` (default `1`) with `AspirationDelta` (`spin`, default `13`, the initial aspiration half-window in
 cp), the **Phase 1d history-selectivity toggles** `UseHistLmr` and `UseCorrHist`
-([correction history](corrhist.hpp.md) — the learned pawn-structure static-eval adjustment),
-both default `1`, `UseHistPrune` (default **`0`** — A/B-neutral at margins 2048 and 1024), and `UseCapHist` ([capture history](history.hpp.md#historycapturescore)
+([correction history](corrhist.hpp.md) — the learned static-eval adjustment),
+both default `1`, with the **correction-history table weights** `CorrPawnWeight`,
+`CorrNonPawnWeight`, `CorrMinorWeight`, `CorrMajorWeight`, `CorrContWeight` (`spin`,
+percent, default `100`, range `0`–`400`; `0` switches a table's read off — see
+[`CorrWeights`](corrhist.hpp.md#struct-corrweights)), `UseHistPrune` (default **`0`** — A/B-neutral at margins 2048 and 1024), and `UseCapHist` ([capture history](history.hpp.md#historycapturescore)
 in the capture order; default **`0`** — A/B-neutral, +2.3 ± 5.7 Elo), the **Phase 1d whole-node pruning toggles** `UseRazoring`
 and `UseProbCut` (both default **`0`** — wired but inert until an SPRT accepts them), plus
 the **SPSA-tunable forward-pruning

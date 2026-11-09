@@ -110,9 +110,10 @@ struct Tunables {
                                  // (10000 games each) -- so it ships off.
     bool useHistLmr = true;      // history-modulated LMR reduction. **+17.7 +/- 9.2 Elo**
                                  // (52.54%, 2912 games, SPRT [0,5] accepted).
-    bool useCorrHist = true;     // pawn-structure correction of the static eval. **+27.6 +/-
-                                 // 11.3 Elo** (53.97%, 1953 games, SPRT [0,5] accepted) --
-                                 // the biggest Phase 1d gainer so far.
+    bool useCorrHist = true;     // correction of the static eval. Pawn-structure only, it was
+                                 // **+27.6 +/- 11.3 Elo** (53.97%, 1953 games, SPRT [0,5]
+                                 // accepted) -- the biggest Phase 1d gainer. Now read from
+                                 // five tables, weighted by the corr*Weight knobs below.
     bool useCaptureHist = false; // capture history in the capture order. +2.3 +/- 5.7 Elo
                                  // (50.32%, 7399 games) -- neutral, so it ships off.
 
@@ -121,6 +122,14 @@ struct Tunables {
     // wired, tunable, and inert, which also keeps the bench signature stable.
     bool useRazoring = false; // drop to q-search when the eval is far below alpha
     bool useProbCut  = false; // shallow capture search predicting a deep fail-high
+
+    // Correction-history table weights, percent (see CorrWeights in corrhist.hpp); 0 turns
+    // a table off. SPSA-tunable.
+    int corrPawnWeight    = 100;
+    int corrNonPawnWeight = 100;
+    int corrMinorWeight   = 100;
+    int corrMajorWeight   = 100;
+    int corrContWeight    = 100;
 
     // Aspiration: initial half-window (cp) around the previous iteration's score.
     Value aspirationDelta = 13;
@@ -185,11 +194,15 @@ private:
     Value aspirationSearch(Board& board, int depth, Value prevScore);
     Value qsearch(Board& board, Value alpha, Value beta, int ply);
 
-    // Static eval of `board` as the search reasons about it: the raw evaluation plus the
-    // correction-history adjustment for this pawn structure (or `raw` unchanged when
-    // correction history is off). `raw` is passed in so a caller can reuse a TT-cached
-    // static eval instead of re-evaluating.
-    Value correctedEval(const Board& board, Value raw) const;
+    // The correction-history buckets of the node at `ply`, keyed by `board` and the move
+    // that led to it (none at the root or after a null move).
+    CorrSlots corrSlots(const Board& board, int ply) const;
+
+    // Static eval as the search reasons about it: the raw evaluation plus the
+    // correction-history adjustment for `slots` (or `raw` unchanged when correction
+    // history is off). `raw` is passed in so a caller can reuse a TT-cached static eval
+    // instead of re-evaluating.
+    Value correctedEval(const CorrSlots& slots, Value raw) const;
 
     // The raw static eval of the node at `ply`: NNUE from that ply's accumulator when a
     // network is loaded, else the hand-crafted eval.
@@ -239,7 +252,8 @@ private:
 
     // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
     // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds
-    // continuation history the moves 1 and 2 plies back. Written just before recursing.
+    // continuation history the moves 1 and 2 plies back, and correction history the move
+    // 1 ply back. Written just before recursing (by q-search too).
     int contPiece_[MAX_PLY]{};
     int contTo_[MAX_PLY]{};
 

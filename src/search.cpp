@@ -105,6 +105,16 @@ static_assert(PROBCUT_TT_DEPTH_MARGIN > SINGULAR_TT_DEPTH_MARGIN,
 // draw; otherwise a stored score can't be trusted (it may ignore the looming draw).
 constexpr int TT_CUTOFF_MAX_HALFMOVE = 90;
 
+// Depth a q-search result is stored at: below every main-search store (depth >= 1), so a
+// q-search entry can never cut a main-search node, while any entry cuts in q-search.
+constexpr int QS_TT_DEPTH = 0;
+
+// Does a TT score with this bound settle the window [alpha, beta]?
+bool ttBoundCuts(Bound bound, Value ttValue, Value alpha, Value beta) {
+    return bound == BOUND_EXACT || (bound == BOUND_LOWER && ttValue >= beta) ||
+           (bound == BOUND_UPPER && ttValue <= alpha);
+}
+
 // Quiet move-count threshold for LMP at `depth`; fewer when the eval is not improving.
 int lmpCount(int depth, bool improving, int base) {
     const int count = base + depth * depth;
@@ -285,8 +295,14 @@ int Searcher::lmrReduction(int depth, int moveCount) const {
     return reductions_[std::min(depth, LMR_DIM - 1)][std::min(moveCount, LMR_DIM - 1)];
 }
 
-Value Searcher::correctedEval(const Board& board, Value raw) const {
-    return tp_.useCorrHist ? corrHist_.corrected(board, raw) : raw;
+CorrSlots Searcher::corrSlots(const Board& board, int ply) const {
+    const bool hasPrev = ply >= 1 && contPiece_[ply - 1] >= 0;
+    return CorrectionHistory::slots(board, hasPrev ? contPiece_[ply - 1] : -1,
+                                    hasPrev ? contTo_[ply - 1] : 0);
+}
+
+Value Searcher::correctedEval(const CorrSlots& slots, Value raw) const {
+    return tp_.useCorrHist ? corrHist_.corrected(slots, raw) : raw;
 }
 
 // Triangular PV update: `m` raised alpha at this PV node, so this ply's line becomes
@@ -346,9 +362,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         if (!pvNode && !inSingular && tt.depth >= depth &&
             board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE) {
             const Value ttv = valueFromTT(tt.value, ply);
-            if (tt.bound == BOUND_EXACT || (tt.bound == BOUND_LOWER && ttv >= beta) ||
-                (tt.bound == BOUND_UPPER && ttv <= alpha))
-                return ttv;
+            if (ttBoundCuts(tt.bound, ttv, alpha, beta)) return ttv;
         }
     }
 
@@ -358,14 +372,16 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
     // Reuse the TT's stored static eval when present; skip it entirely when in check.
     // The TT holds the *raw* eval; the correction-history adjustment is applied on top
     // here (and never stored back, or it would compound on every revisit).
-    Value rawEval = VALUE_NONE;
-    Value eval;
+    Value     rawEval = VALUE_NONE;
+    Value     eval;
+    CorrSlots corr;
     if (inCheck) {
         eval              = VALUE_NONE;
         staticEvals_[ply] = VALUE_NONE;
     } else {
         rawEval           = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : staticEval(board, ply);
-        eval              = correctedEval(board, rawEval);
+        corr              = corrSlots(board, ply);
+        eval              = correctedEval(corr, rawEval);
         staticEvals_[ply] = eval;
     }
     const bool improving =
@@ -621,9 +637,9 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
                             : best > alphaOrig ? BOUND_EXACT
                                                : BOUND_UPPER;
 
-        // Correction history: the search disagreed with the static eval by `best - eval`
-        // in this pawn structure — remember that residual so the next node here starts
-        // from a better guess. Only from a trustworthy verdict: out of check, with a real
+        // Correction history: the search disagreed with the corrected static eval by
+        // `best - eval` — teach every table that residual so the next node like this one
+        // starts from a better guess. Only from a trustworthy verdict: out of check, with a real
         // quiet best move (a capture's score says more about material than about the
         // structure), away from mate scores, and only when the bound does not contradict
         // the residual's sign (a fail-high is a lower bound, so it may only teach that
@@ -631,7 +647,7 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         if (tp_.useCorrHist && !inCheck && bestMove != Move(Move::NO_MOVE) && !is_mate(best) &&
             !board.isCapture(bestMove) && !(bound == BOUND_LOWER && best <= eval) &&
             !(bound == BOUND_UPPER && best >= eval))
-            corrHist_.update(board, depth, best - eval);
+            corrHist_.update(corr, depth, best - eval);
 
         tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : rawEval, bestMove,
                   bound);
@@ -669,7 +685,9 @@ Value Searcher::aspirationSearch(Board& board, int depth, Value prevScore) {
 
 // Quiescence search: at the horizon, keep resolving captures (and, when in check,
 // all evasions) until the position is quiet, so the static eval is never read in the
-// middle of a capture sequence (the horizon effect). Fail-soft; no TT of its own.
+// middle of a capture sequence (the horizon effect). Fail-soft. Shares the TT with the
+// main search: any entry for this position can cut (off the PV), its static eval saves
+// an evaluation, its move is searched first, and the result is stored at QS_TT_DEPTH.
 Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     if (timeUp_) return VALUE_ZERO;
 
@@ -680,38 +698,59 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     if (board.isHalfMoveDraw() || board.isInsufficientMaterial() || board.isRepetition(1))
         return VALUE_DRAW;
 
-    const bool inCheck = board.inCheck();
+    const bool     pvNode  = beta - alpha > 1;
+    const uint64_t key     = board.hash();
+    const TTProbe  tt      = tt_.probe(key);
+    const Value    ttValue = tt.hit ? valueFromTT(tt.value, ply) : VALUE_NONE;
+    if (tt.hit && !pvNode && tt.depth >= QS_TT_DEPTH &&
+        board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE &&
+        ttBoundCuts(tt.bound, ttValue, alpha, beta))
+        return ttValue;
+
+    // Never let a q-search result overwrite a deeper main-search entry for this position.
+    const bool canStore = !tt.hit || tt.depth <= QS_TT_DEPTH;
+    const bool inCheck  = board.inCheck();
 
     // Stand-pat: the static eval is a lower bound on the score — but standing pat is
-    // forbidden in check, where the side to move must answer the threat.
-    Value best = -VALUE_INFINITE;
+    // forbidden in check, where the side to move must answer the threat. A TT score whose
+    // bound says the truth lies beyond the eval is the better estimate.
+    Value rawEval = VALUE_NONE;
+    Value best    = -VALUE_INFINITE;
     if (!inCheck) {
-        best = correctedEval(board, staticEval(board, ply));
-        if (best >= beta) return best; // fail-soft beta cutoff
+        rawEval = (tt.hit && tt.eval != VALUE_NONE) ? tt.eval : staticEval(board, ply);
+        best    = correctedEval(corrSlots(board, ply), rawEval);
+        if (tt.hit && (tt.bound & (ttValue > best ? BOUND_LOWER : BOUND_UPPER))) best = ttValue;
+        if (best >= beta) { // fail-soft beta cutoff
+            if (canStore)
+                tt_.store(key, QS_TT_DEPTH, valueToTT(best, ply), rawEval, Move(Move::NO_MOVE),
+                          BOUND_LOWER);
+            return best;
+        }
         if (best > alpha) alpha = best;
     }
     if (ply >= MAX_PLY - 1)
         return inCheck ? staticEval(board, ply) : best; // depth guard: stop descending
 
     // In check: search every evasion, ordered like a main node. Otherwise: only
-    // captures / capture-promotions, MVV-LVA ordered.
-    Movelist moves;
+    // captures / capture-promotions, MVV-LVA ordered. The TT move goes first either way.
+    const Move ttMove = tt.hit ? tt.move : Move(Move::NO_MOVE);
+    Movelist   moves;
     if (inCheck) {
         movegen::legalmoves(moves, board);
         if (moves.empty()) return mated_in(ply); // checkmate
-        orderMoves(board, moves, Move(Move::NO_MOVE), history_, ply, Move(Move::NO_MOVE),
-                   ContHistContext{});
+        orderMoves(board, moves, ttMove, history_, ply, Move(Move::NO_MOVE), ContHistContext{});
     } else {
         // Not in check: only captures. An empty list here means "no captures", not
         // necessarily "no moves" — so a stalemate is scored as its (quiet) stand-pat
         // eval rather than a draw. This is the standard quiescence limitation (q-search
         // never enumerates quiets); the main search catches stalemate at depth > 0.
         movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
-        orderCaptures(board, moves);
+        orderCaptures(board, moves, ttMove);
     }
 
     const Value standPat = best;
     const bool  useDelta = !inCheck && board.occ().count() > tp_.endgamePieces;
+    Move        bestMove = Move(Move::NO_MOVE);
 
     for (const auto& m : moves) {
         if (!inCheck) {
@@ -727,6 +766,8 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
             if (!seeGE(board, m, 0)) continue;
         }
 
+        contPiece_[ply] = static_cast<int>(board.at(m.from())); // child's correction context
+        contTo_[ply]    = m.to().index();
         makeMove(board, m, ply);
         const Value score = -qsearch(board, -beta, -alpha, ply + 1);
         board.unmakeMove(m);
@@ -734,12 +775,16 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
         if (timeUp_) return VALUE_ZERO;
 
         if (score > best) {
-            best = score;
+            best     = score;
+            bestMove = m;
             if (score > alpha) alpha = score;
             if (alpha >= beta) break; // fail-high cutoff
         }
     }
 
+    if (canStore)
+        tt_.store(key, QS_TT_DEPTH, valueToTT(best, ply), rawEval, bestMove,
+                  best >= beta ? BOUND_LOWER : BOUND_UPPER);
     return best;
 }
 
@@ -787,6 +832,8 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     tt_.newSearch();
     history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove, tp_.useContHist,
                         tp_.useCaptureHist);
+    corrHist_.setWeights({tp_.corrPawnWeight, tp_.corrNonPawnWeight, tp_.corrMinorWeight,
+                          tp_.corrMajorWeight, tp_.corrContWeight});
     buildReductions();
     rootBest_          = Move(Move::NO_MOVE);
     rootBestCompleted_ = Move(Move::NO_MOVE);

@@ -148,10 +148,15 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `useAspiration` | `bool` | `true` | Enable root aspiration windows (`UseAspiration`). |
 | `useHistPrune` | `bool` | **`false`** | Enable history pruning of late quiets (Phase 1d) (`UseHistPrune`). Neutral at both margins tried (`2048` and `1024`), so it ships off (see the Phase 1d rationale below). |
 | `useHistLmr` | `bool` | `true` | Enable the history-modulated LMR adjustment (Phase 1d) (`UseHistLmr`). **+17.7 ± 9.2 Elo** vs 0.1c. |
-| `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned pawn-structure adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw [`evaluate`](eval.hpp.md#evaluate) score. **+27.6 ± 11.3 Elo** vs 0.1c. |
+| `useCorrHist` | `bool` | `true` | Enable [correction history](corrhist.hpp.md) — the learned adjustment to the static eval (Phase 1d) (`UseCorrHist`). Off, the search sees the raw static eval. Pawn-structure only, it measured **+27.6 ± 11.3 Elo** vs 0.1c; it now reads five tables (pawn, non-pawn per colour, minor, major, continuation), weighted by the `corr*Weight` knobs below. |
 | `useCaptureHist` | `bool` | **`false`** | Enable [capture history](history.hpp.md#historycapturescore) in the capture order (Phase 1d) (`UseCapHist`). Off, captures are ordered by SEE + MVV-LVA alone. **+2.3 ± 5.7 Elo** — neutral, so it ships off (see the Phase 1d rationale below). |
 | `useRazoring` | `bool` | **`false`** | Enable razoring (Phase 1d) (`UseRazoring`). Ships **off** — PLAN.md §15 rates it a tune-last extra, so it is wired and inert until an SPRT says otherwise (which also keeps the bench signature stable). |
 | `useProbCut` | `bool` | **`false`** | Enable ProbCut (Phase 1d) (`UseProbCut`). Ships **off**, same reasoning. |
+| `corrPawnWeight` | `int` | `100` | Read weight of the pawn-structure correction table, percent (`CorrPawnWeight`, 0–400; `0` = off). Copied into a [`CorrWeights`](corrhist.hpp.md#struct-corrweights) by [`think`](#searcherthink). |
+| `corrNonPawnWeight` | `int` | `100` | Read weight of each colour's non-pawn correction lookup, percent (`CorrNonPawnWeight`). |
+| `corrMinorWeight` | `int` | `100` | Read weight of the minor-piece correction table, percent (`CorrMinorWeight`). |
+| `corrMajorWeight` | `int` | `100` | Read weight of the major-piece correction table, percent (`CorrMajorWeight`). |
+| `corrContWeight` | `int` | `100` | Read weight of the continuation (previous-move) correction table, percent (`CorrContWeight`). Untested defaults all; meant for SPRT/SPSA. |
 | `aspirationDelta` | `Value` | `13` | Initial half-window (cp) around the previous score (`AspirationDelta`). |
 | `lmrBase` | `int` | `55` | LMR reduction offset ×100 (`LmrBase`); `0.55` in the curve. |
 | `lmrDivisor` | `int` | `152` | LMR `ln·ln` divisor ×100 (`LmrDivisor`); `1.52` in the curve (kept ≥ 1). |
@@ -285,10 +290,10 @@ pointer: with a network the static eval is NNUE, without one (the default, and w
 | `accumulators_` | `std::unique_ptr<std::array<`[`nnue::Accumulator`](nnue.hpp.md#struct-accumulator)`, MAX_PLY + 1>>` | One accumulator per ply (index = ply, 2 KB each, ~258 KB total). Heap-allocated once in the constructor, and only when `net_` is set, so the searcher stays small enough for a thread's stack. Entry 0 is refreshed from the root in [`think`](#searcherthink); every make writes entry `ply + 1`. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
 | `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves) for this search. |
-| `corrHist_` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Learned per-pawn-structure static-eval correction for this search (64 KB, zeroed on construction). |
+| `corrHist_` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Learned static-eval correction for this search (five tables, ~330 KB heap-owned by the history, zeroed on construction). |
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
-| `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion; read as `[ply-1]` / `[ply-2]` to build a node's continuation context. |
+| `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion (by q-search too); read as `[ply-1]` / `[ply-2]` to build a node's continuation context, and as `[ply-1]` for its correction-history continuation slot ([`corrSlots`](#searchercorrslots)). |
 | `pv_` | `std::array<std::array<Move, MAX_PLY>, MAX_PLY>` | Triangular PV table: row `ply` holds the best line found from that ply (64 KB). Filled by [`updatePv`](#searcherupdatepv). |
 | `pvLength_` | `std::array<int, MAX_PLY>` | Length of each `pv_` row; reset to 0 on entry to every [`search`](#searchersearch) call. |
 | `rootPv_` / `rootPvLength_` | `std::array<Move, MAX_PLY>` / `int` | The root line of the last **completed** iteration (copied by [`saveRootPv`](#searchersaverootpv)), so an aborted iteration cannot corrupt the reported PV or the ponder move. |
@@ -310,7 +315,7 @@ pointer: with a network the static eval is NNUE, without one (the default, and w
 | `rootBestCompleted_` | `Move` | Best move of the last **completed** iteration (the one actually played). |
 | `rootScore_` | `Value` | Score of the last **completed** iteration (side-to-move cp; `VALUE_ZERO` until one completes). Read through [`score`](#searcherscore). |
 
-**Methods:** [`Searcher::Searcher`](#searchersearcher), [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::staticEval`](#searcherstaticeval), [`Searcher::makeMove` / `makeNullMove`](#searchermakemove--searchermakenullmove-private), [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::scaleSoftLimit`](#searcherscalesoftlimit-private), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
+**Methods:** [`Searcher::Searcher`](#searchersearcher), [`Searcher::think`](#searcherthink), [`Searcher::nodes`](#searchernodes), [`Searcher::score`](#searcherscore) (public); [`Searcher::staticEval`](#searcherstaticeval), [`Searcher::makeMove` / `makeNullMove`](#searchermakemove--searchermakenullmove-private), [`Searcher::search`](#searchersearch), [`Searcher::aspirationSearch`](#searcheraspirationsearch), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::corrSlots`](#searchercorrslots), [`Searcher::correctedEval`](#searchercorrectedeval), [`Searcher::buildReductions`](#searcherbuildreductions), [`Searcher::lmrReduction`](#searcherbuildreductions), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::scaleSoftLimit`](#searcherscalesoftlimit-private), [`Searcher::checkStop`](#searchercheckstop), [`Searcher::syncPonder`](#searchersyncponder), [`Searcher::budgetSpent`](#searcherbudgetspent), [`Searcher::awaitRelease`](#searcherawaitrelease), [`Searcher::elapsedMs`](#searcherelapsedms), [`Searcher::clockMs`](#searcherclockms), [`Searcher::updatePv`](#searcherupdatepv), [`Searcher::saveRootPv`](#searchersaverootpv), [`Searcher::reportIteration`](#searcherreportiteration), [`Searcher::ponderMove`](#searcherpondermove), [`Searcher::printBestMove`](#searcherprintbestmove) (private).
 
 **Used by:** [uci](uci.hpp.md), [bench](bench.hpp.md), [datagen](datagen.hpp.md)
 
@@ -426,8 +431,8 @@ full Phase 1b selective-search stack (returns `best`). Order of operations:
 1. draw check → **leaf / ply guard → [`qsearch`](#searcherqsearch)** (when `depth <= 0`
    or `ply >= MAX_PLY - 1`);
 2. **TT probe** (cutoff only off the PV) → **static eval** (raw value reused from the TT
-   when present, then [correction history](corrhist.hpp.md) applied on top; skipped in
-   check) → **`improving`** trend;
+   when present, then [correction history](corrhist.hpp.md) applied on top through the
+   node's [`corrSlots`](#searchercorrslots); skipped in check) → **`improving`** trend;
 3. **whole-node pruning** (off-PV, not in check, away from mate): **razoring** → **RFP** →
    **NMP** → **ProbCut**;
 4. **IIR** (gated) → movegen → resolve the **continuation context** (the moves 1/2 plies
@@ -454,14 +459,16 @@ searched exactly.
 - **Static eval & `improving`** — at a non-check node the **raw** static eval is read from
   the TT (`tt.eval`) or computed by [`staticEval`](#searcherstaticeval) (NNUE or HCE), then
   [`correctedEval`](#searchercorrectedeval) adds the
-  [correction-history](corrhist.hpp.md) adjustment for this pawn structure; the
+  [correction-history](corrhist.hpp.md) adjustment for the node's
+  [`corrSlots`](#searchercorrslots) (hashed once here and kept for the update); the
   **corrected** value is what lands in `staticEvals_[ply]` and drives every downstream
   test. `improving` is true when this eval exceeds the same side's eval
   two plies ago (`staticEvals_[ply-2]`) — pruning is a touch more aggressive when the
   position is *not* improving.
 - **Correction history** — after the move loop, a node whose verdict is trustworthy
   teaches [`corrHist_`](corrhist.hpp.md#correctionhistoryupdate) the residual
-  `best − eval`: not in check, a real **quiet** best move, no mate score, not inside a
+  `best − eval` (against the **corrected** eval, through the same slots the eval was read
+  from): not in check, a real **quiet** best move, no mate score, not inside a
   singular verification, and the bound must agree with the residual's sign (`BOUND_LOWER`
   may only teach "the eval was too low", `BOUND_UPPER` only "too high"). The **raw** eval —
   never the corrected one — is what goes into the TT, so a revisit corrects once rather
@@ -704,6 +711,8 @@ the node at `ply`: [`nnue::evaluate`](nnue.hpp.md#evaluate) on `accumulators_[pl
 network is loaded, else [`evaluate`](eval.hpp.md#evaluate)`(board, tp_.tempo)`. The
 network ignores `Tempo` (it learned the side-to-move effect itself). The result is what
 goes into the TT; [`correctedEval`](#searchercorrectedeval) is applied on top as before.
+Both [`search`](#searchersearch) and [`qsearch`](#searcherqsearch) skip it when the TT
+already holds this position's static eval.
 **Performance:** per node; the NNUE path is one 2048-wide SCReLU dot product against the bucket's output row.
 
 ### `Searcher::makeMove` / `Searcher::makeNullMove` (private)
@@ -718,25 +727,37 @@ re-searches the same ply, so it reuses that ply's accumulator unchanged.
 **Performance:** per make; a quiet move is one fused add+subtract pass over 512 int16s per
 perspective, a capture or castle one more column.
 
+### `Searcher::corrSlots` (private)
+
+Hash the node at `ply` into its [`CorrSlots`](corrhist.hpp.md#struct-corrslots) via
+[`CorrectionHistory::slots`](corrhist.hpp.md#correctionhistoryslots): `board` keys the
+pawn / non-pawn / minor / major buckets, and the search stack's `contPiece_[ply - 1]` /
+`contTo_[ply - 1]` — the move that led here — keys the continuation bucket (none at the
+root or after a null move, which records `-1`).
+
+**Parameters:** `board` (`const Board&`, read-only), `ply` (`int`, the node's distance
+from the root).
+**Returns:** [`CorrSlots`](corrhist.hpp.md#struct-corrslots).
+**Performance:** per non-check node and per q-search stand-pat; a few dozen ALU ops.
+
 ### `Searcher::correctedEval` (private)
 
 The static eval as the search reasons about it: `raw` plus the
-[correction-history](corrhist.hpp.md#correctionhistorycorrected) adjustment for this
-position's pawn structure and side to move, or `raw` unchanged when
-[`tp_.useCorrHist`](#struct-tunables) is off.
+[correction-history](corrhist.hpp.md#correctionhistorycorrected) adjustment for `slots`,
+or `raw` unchanged when [`tp_.useCorrHist`](#struct-tunables) is off.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
-| `board` | `const Board&` | Position being evaluated (keys the correction bucket). |
-| `raw` | `Value` | The raw [`evaluate`](eval.hpp.md#evaluate) score — passed in so the caller can reuse a TT-cached static eval instead of re-evaluating. |
+| `slots` | `const CorrSlots&` | The node's correction buckets, from [`corrSlots`](#searchercorrslots). |
+| `raw` | `Value` | The raw static eval — passed in so the caller can reuse a TT-cached static eval instead of re-evaluating. |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — side-to-move-relative cp, clamped
 clear of the mate range.
 
 **Side Effects:** none (reads `corrHist_`).
 
-**Performance:** per node — one pawn-bitboard mix plus one array read on top of the eval.
+**Performance:** per node — five or six weighted array reads on top of the eval.
 
 **Warnings:** the corrected value is what feeds RFP / futility / NMP / `improving` and
 the q-search stand-pat, but the **raw** value is what is written to the TT
@@ -758,8 +779,8 @@ plateau. Rebuilding a 64×64 table once per `go` is negligible against a full se
 Quiescence search: the leaf layer reached when the main search hits `depth <= 0`. It
 keeps resolving **captures** (and, when in check, **all evasions**) until the position
 is quiet, so the static eval is never read in the middle of a capture sequence (the
-horizon effect). Fail-soft, full window; it keeps its own node/time accounting but
-uses **no TT** of its own.
+horizon effect). Fail-soft; it keeps its own node/time accounting and **shares the TT**
+with the main search.
 
 **Parameters:**
 | Name | Type | Description |
@@ -774,15 +795,27 @@ uses **no TT** of its own.
 when aborting (`timeUp_`).
 
 **Behavior:**
-- **Stand-pat**: when *not* in check, [`staticEval`](#searcherstaticeval)`(board, ply)`
-  — passed through [`correctedEval`](#searchercorrectedeval), so q-search and the main
-  search agree on what a position is worth —
-  seeds `best` as a lower bound; return immediately on `best >= beta`, else raise `alpha`. When
-  **in check**, standing pat is forbidden: `best` starts at `-∞` and every legal
-  evasion is searched (`orderMoves`, ordered with the shared `history_` killers/history
-  but no TT/countermove context), so a genuine checkmate scores `mated_in(ply)`.
+- **TT probe** (after the draw check): off the PV (`beta − alpha == 1`), **any** entry for
+  this position — a q-search entry at `QS_TT_DEPTH` (0) or a main-search entry (depth ≥ 1)
+  — cuts when its bound settles the window (`ttBoundCuts`, shared with the main search)
+  and the fifty-move clock is below `TT_CUTOFF_MAX_HALFMOVE`. The entry's static eval,
+  value and move are reused below.
+- **Stand-pat**: when *not* in check, the raw static eval (the TT's `eval` when present,
+  else [`staticEval`](#searcherstaticeval)`(board, ply)`) — passed through
+  [`correctedEval`](#searchercorrectedeval) with this node's
+  [`corrSlots`](#searchercorrslots), so q-search and the main search agree on what a
+  position is worth — seeds `best`. A TT value whose bound points beyond it (a
+  `BOUND_LOWER` value above the eval, a `BOUND_UPPER` value below it) replaces it as the
+  better estimate. Return immediately on `best >= beta` (storing a `BOUND_LOWER` entry),
+  else raise `alpha`. When **in check**, standing pat is forbidden: `best` starts at `-∞`
+  and every legal evasion is searched ([`orderMoves`](movepick.hpp.md#ordermoves) with the
+  TT move and the shared `history_` killers/history, but no countermove context), so a
+  genuine checkmate scores `mated_in(ply)`.
 - **Move set**: not in check → captures / capture-promotions only
-  (`legalmoves<CAPTURE>`), [`orderCaptures`](movepick.hpp.md#ordercaptures) by MVV-LVA.
+  (`legalmoves<CAPTURE>`), [`orderCaptures`](movepick.hpp.md#ordercaptures) by MVV-LVA
+  with the TT move (when it is a capture) first. Each move records itself in the search
+  stack (`contPiece_[ply]` / `contTo_[ply]`) before it is made, so the child's
+  correction-history continuation slot is current.
 - **SEE pruning**: a capture with [`seeGE`](see.hpp.md#seege)`(m, 0) == false` (a losing
   exchange) is skipped — the single biggest q-search node reducer.
 - **Delta pruning**: skip a capture when `standPat + pieceValue(victim) + tp_.deltaMargin
@@ -791,10 +824,16 @@ when aborting (`timeUp_`).
   material swings decide the game.
 - **Depth guard**: returns the static eval at `ply >= MAX_PLY - 1` so a long checking
   sequence cannot overflow the ply budget.
+- **TT store**: the result is stored at `QS_TT_DEPTH` (0) with the best move, the raw
+  static eval (`VALUE_NONE` in check) and `BOUND_LOWER` on a fail-high, else
+  `BOUND_UPPER` — never `BOUND_EXACT`, since a fail-soft q-search score below beta is
+  only an upper bound on the full search. It is **skipped** when the probe found a deeper
+  (main-search) entry for this position, so a q-search verdict never evicts real search
+  work. Depth 0 sits below every main-search store, so a q-search entry can seed a main
+  node's move and static eval but never cut it.
 
 **Side Effects:** mutates `board` transiently; updates `nodes_`; periodically calls
-`checkStop`. Reads (does not write) the TT via nothing — q-search does not probe or
-store.
+`checkStop`; probes and writes the shared TT; writes `contPiece_[ply]` / `contTo_[ply]`.
 
 **Warnings:** the q-search recurses on captures (and check evasions) only, never on
 quiet checks, so it terminates as material is consumed. Non-capturing (quiet)
@@ -803,8 +842,9 @@ quiet queen promotion may be deferred to the main search. **Stalemate is not det
 when not in check**: an empty capture list means "no captures", not "no moves", so a
 stalemated node returns its stand-pat eval instead of `VALUE_DRAW` — the standard
 quiescence limitation (enumerating quiets would defeat q-search's purpose); the main
-search still scores stalemate correctly at `depth > 0`. There is no TT cutoff here, so
-q-search results are recomputed each visit (a future optimization).
+search still scores stalemate correctly at `depth > 0`. A TT cutoff in q-search can
+return a score from a deeper main search; that is strictly better information, and the
+fifty-move guard keeps it from ignoring a looming draw.
 
 ### `Searcher::setupTiming` (private)
 

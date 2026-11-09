@@ -53,3 +53,23 @@ TEST_CASE("still finds a forced mate in one") {
     // Ra1-a8 is mate; the king is boxed in by its own pawns.
     CHECK(bestMove("6k1/5ppp/8/8/8/8/8/R6K w - - 0 1", 3) == "a1a8");
 }
+
+TEST_CASE("q-search results are stored in the shared TT") {
+    // A depth-1 search resolves every root reply in q-search, which stores its verdict at
+    // depth 0 — below any main-search entry, so it can only ever cut inside q-search.
+    const char*              fen = "4k3/8/8/3q4/4P3/8/8/4K3 w - - 0 1";
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Searcher                 searcher(state, tt);
+
+    Limits limits;
+    limits.depth = 1;
+    searcher.think(Board(fen), limits, /*printBest=*/false, /*printInfo=*/false);
+
+    Board after(fen);
+    after.makeMove(uci::uciToMove(after, "e4d5"));
+    const TTProbe probe = tt.probe(after.hash());
+    REQUIRE(probe.hit);
+    CHECK(probe.depth == 0);
+    CHECK(probe.eval != VALUE_NONE); // the stand-pat eval is cached for the next visit
+}

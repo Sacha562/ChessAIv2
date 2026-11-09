@@ -109,11 +109,11 @@ void orderMoves(const Board& board, Movelist& moves, Move ttMove, const History&
     sortByScore(moves, scores, n);
 }
 
-void orderCaptures(const Board& board, Movelist& moves) {
+void orderCaptures(const Board& board, Movelist& moves, Move ttMove) {
     int       scores[constants::MAX_MOVES];
     const int n = moves.size();
     for (int i = 0; i < n; ++i)
-        scores[i] = mvvLva(board, moves[i]);
+        scores[i] = moves[i] == ttMove ? SCORE_TT : mvvLva(board, moves[i]);
     sortByScore(moves, scores, n);
 }
 
