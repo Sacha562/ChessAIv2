@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.6.1 (q-search TT + wider correction history on net5) · next: width and king buckets on the 714M positions
+## Status — v0.6.2 (search histories kept across moves, on net5) · next: width and king buckets on the 714M positions
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.6.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6.2) | 1d — search | Move-ordering history and correction history now carry over from one move's search to the next for the whole game (cleared on `ucinewgame`; only the ply-indexed killers start over each search): **+14.2 Elo** vs v0.6.1 |
 | [v0.6.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6.1) | 1d — search | Quiescence search now probes and stores the transposition table, and correction history reads five tables (pawn, non-pawn per colour, minor, major, previous move) with a gravity update instead of one pawn table: **+28.5 Elo** vs v0.6 |
 | [v0.6](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6) | 2 — NNUE (net5) | Fifth net: same shape, with 300M new positions of net4 self-play added to the training data (714M positions in all, every one rescored by Stockfish 19 at 5,000 nodes) and 60% longer training: **+76.2 Elo** vs v0.5.1 |
 | [v0.5.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5.1) | 1d — search tune | All fourteen search margins re-tuned for the NNUE eval (they were last tuned on the hand-crafted eval): much tighter reverse futility, a looser q-search delta cushion, deeper null-move reductions, earlier singular extensions: **+34.3 Elo** vs v0.5 at 40+0.4 |
@@ -38,7 +39,8 @@ numbers are in [PLAN.md](PLAN.md#project-status).
   (captures, SEE pruning, delta pruning, shared TT), check and singular extensions, IIR.
 - **Selectivity:** null-move pruning, LMR (log table, history-adjusted), reverse
   futility, futility, late-move pruning, correction history on the static eval
-  (pawn, non-pawn, minor, major and previous-move tables).
+  (pawn, non-pawn, minor, major and previous-move tables). History and correction
+  history persist across the moves of a game.
 - **Move ordering:** TT move → good captures (SEE + MVV-LVA) → killers → countermove
   → butterfly + continuation history → bad captures.
 - **Evaluation:** NNUE by default — a `(768 → 1024)×2` SCReLU network with 8 output
