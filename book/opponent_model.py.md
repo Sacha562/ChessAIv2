@@ -33,7 +33,7 @@ Frozen dataclass:
 - **`move`:** UCI.
 - **`prob`:** predicted probability.
 - **`source`:**
-  - `history`: the opponent's own reply frequencies in this exact position
+  - `history`: the opponent's own recency-weighted reply frequencies in this exact position
   - `pattern`: the same move at this ply in their recent games
 
 ### Table `opponent_model` ([db.py.md](db.py.md#schema-schema))
@@ -45,7 +45,7 @@ our position `key`:
 |--------|---------|
 | `expected` | Expected score for us after the predicted reply(ies), probability-weighted. |
 | `reply` / `reply_prob` / `source` | The most likely predicted reply. |
-| `replies` | Signature of the full prediction (`move:prob …`), used as a cache key. |
+| `replies` | Signature of the full prediction (`move:prob …`, probabilities rounded to `SIGNATURE_PROB_STEP` = 0.05), used as a cache key. |
 | `updated_at` | When it was last computed. |
 
 ### Settings
@@ -56,8 +56,11 @@ Defined in [`DEFAULT_SETTINGS`](config.py.md#default_settings):
 |---------|---------|------|
 | `k_model` | `8.0` | Pseudo-games the model value is worth in the opponent layer. |
 | `model_recent_games` | `20` | Recent games per our color used for ply patterns. Older habits fade out. |
+| `model_half_life_games` | `3.0` | Reply history decay: a game this many games older (same color for us) counts half. `0` turns decay off. |
+| `model_root_min_prob` | `0.2` | As Black, every first move of theirs at least this likely gets its own deepen root. |
 | `model_pattern_min_games` / `model_pattern_share` | `3` / `0.8` | A ply is a pattern with ≥ 3 games and a top-move share of ≥ 80 %. |
 | `model_pattern_max_ply` | `12` | Patterns are only looked for in the first 6 moves. |
+| `model_pattern_break_games` | `3` | A pattern is dropped once their latest 3 games at that ply all deviate from it. |
 | `model_nodes` | `2000000` | Stockfish nodes per evaluated position. |
 | `model_branch` | `2` | Lines followed per position (best-scoring candidates). |
 | `model_max_positions` | `40` | Our positions expanded per deepen run. |
@@ -78,16 +81,40 @@ same move.
 ### `ply_patterns`
 
 `{(our color, ply): move}` for plies where the opponent's recent games (the
-latest `model_recent_games` per our color) agree. For Bongaclang:
+latest `model_recent_games` per our color) agree. Before November 2026, for
+Bongaclang:
 - `("black", 0)` → `e2e4` and `("black", 2)` → `e1e2`
 - `("white", 1)` → `e7e5` and `("white", 3)` → `e8e7`
+
+A ply whose latest `model_pattern_break_games` games all deviate from the top
+move is skipped, even when the share still qualifies. Without that rule,
+Bongaclang's 17-of-20 `e1e2` kept predicting 2.Ke2 after its new 1.e3, though
+it had just played 2.Ne2, 2.d4 and 2.e3. One or two deviations keep the habit.
+
+### `_ply_pattern`
+
+The habitual move at one ply from the opponent's moves there, newest first:
+`None` below `model_pattern_min_games` games, below `model_pattern_share`, or
+when none of the latest `model_pattern_break_games` moves is the top move.
+
+### `history_weights`
+
+Recency-weighted counts of the opponent's legal moves in `board`. A game's age
+is its rank among this opponent's games with the same color for us, newest
+first. A move from a game `age` games old counts `0.5 ** (age / half_life)`,
+so habits fade at the pace that opponent plays us with that color.
+
+**Why it exists.** Plain counts never let go of an old habit. In November 2026
+Bongaclang dropped 1.e4 2.Ke2 for 1.e3 and 1.d3, but its dozens of 1.e4 games
+kept the model predicting 1.e4. With `model_half_life_games` = 3, three games
+of a new move outweigh any length of older history.
 
 ### `predict_replies`
 
 The opponent's predicted replies in `board` (opponent to move), most likely
 first:
-1. Their reply frequencies in this exact position, if they have been here
-   (`history`).
+1. Their [recency-weighted](#history_weights) reply frequencies in this exact
+   position, if they have been here (`history`).
 2. Otherwise, the ply pattern if its move is legal here (`pattern`).
 3. Otherwise, an empty list: no prediction.
 
@@ -102,21 +129,30 @@ Our expected score after `move` and the predicted replies: a
 probability-weighted Stockfish `position_expected` at `model_nodes`, or the
 result for a finished game. If the stored row has the same reply signature, the
 cached value is reused, so repeated deepen runs cost Stockfish time only where
-the prediction changed.
+the prediction changed. Signature probabilities are rounded to 0.05, so the
+small drift recency decay causes after each game does not force a re-run.
 
 **Returns:** `(expected, replies)`, or `None` when the reply cannot be
 predicted. Nothing is stored in that case, because the model would add nothing
-over the generic book.
+over the generic book, and a row stored from an earlier prediction is deleted.
+Otherwise a habit the opponent dropped would keep weighting the move.
 
 ### `_position_value`
 
 Stockfish expected score for us, or 1 / ½ / 0 for a finished game.
 
+### `black_roots`
+
+Positions after each first move the opponent plays as White with a predicted
+probability of at least `model_root_min_prob`, most likely first. The most
+likely move is always included. An opponent who mixes first moves gets every
+main one modelled, and during a switch both the old and the new move are.
+
 ### `deepen`
 
 Walks the predicted lines breadth-first:
-- **Roots:** the start position for our White games, and the position after
-  the predicted first move for our Black games.
+- **Roots:** the start position for our White games, and every
+  [`black_roots`](#black_roots) position for our Black games.
 - **At each of our positions below `max_book_ply`:**
   1. Make sure it has candidates (`ensure_candidates`, which runs Stockfish
      candidate generation via [`run_deepen`](worker.py.md#run_deepen)).

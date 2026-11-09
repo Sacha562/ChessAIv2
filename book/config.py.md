@@ -44,7 +44,7 @@ enforced by [`coerce_setting`](#coerce_setting).
 | `exhaust_threshold` | `0.40` | Posterior mean below which a well-tried candidate counts as failing against an opponent. |
 | `exhaust_min_games` | `3` | Weighted games against the opponent before a candidate can be exhausted. |
 | `tier_gaps` | `[0.03, 0.07, 0.12, 0.18]` | Upper bound of the expected-score gap to the best move for tiers 0, 1, 2, 3. The last tier is filled only by widened analysis. |
-| `k_model`, `model_*` | see [opponent_model.py.md](opponent_model.py.md#settings) | Opponent-model weight, pattern detection, deepen budget, promotion, auto-deepen thresholds. |
+| `k_model`, `model_*` | see [opponent_model.py.md](opponent_model.py.md#settings) | Opponent-model weight, reply-history decay, pattern detection and break rule, Black deepen roots, deepen budget, promotion, auto-deepen thresholds. |
 | `candidate_always_ply` | `8` | Positions from game history before this ply are always analysed. |
 | `candidate_min_visits` | `2` | Deeper positions from history are analysed only after being reached on our move this many times. |
 | `analysis_depth` / `analysis_multipv` | `20` / `8` | Stockfish depth and MultiPV for normal candidate generation. |

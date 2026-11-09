@@ -41,9 +41,12 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # Opponent model (predicted replies -> per-opponent weights)
     "k_model": 8.0,
     "model_recent_games": 20,
+    "model_half_life_games": 3.0,  # reply history: a game this many games older counts half
+    "model_root_min_prob": 0.2,  # as Black, model each of their first moves at least this likely
     "model_pattern_min_games": 3,
     "model_pattern_share": 0.8,
     "model_pattern_max_ply": 12,
+    "model_pattern_break_games": 3,  # a pattern is dropped once this many latest games deviate
     "model_nodes": 2_000_000,
     "model_branch": 2,
     "model_max_positions": 40,

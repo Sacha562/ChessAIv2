@@ -7,7 +7,7 @@ against what this opponent actually plays. The model fixes that without any
 forced move:
 
 1. **Predict replies.** In a position this opponent has faced before, use their
-   reply frequencies there. Otherwise, if in recent games they almost always
+   reply frequencies there, weighted toward recent games. Otherwise, if in recent games they almost always
    played the same move at this ply with this color (e.g. 2...Ke7), predict it.
 2. **Deepen.** From the start position, walk our candidate moves and the
    predicted replies, analysing new positions with Stockfish, and score each
@@ -30,6 +30,7 @@ from . import db
 from .engine import Stockfish
 
 DETERMINISM_MAX_PLY = 40
+SIGNATURE_PROB_STEP = 0.05  # reply-probability resolution of the model cache key
 
 
 @dataclass(frozen=True)
@@ -61,44 +62,86 @@ def ply_patterns(conn: sqlite3.Connection, opponent: str, settings: dict) -> dic
     Uses the opponent's ``model_recent_games`` most recent games per our color,
     plies below ``model_pattern_max_ply``; a ply qualifies with at least
     ``model_pattern_min_games`` games and a top-move share of at least
-    ``model_pattern_share``.
+    ``model_pattern_share``. A habit the opponent just dropped is not a pattern:
+    if their latest ``model_pattern_break_games`` games at that ply all played
+    something else, the ply is skipped even when the share still qualifies.
     """
     patterns: dict[tuple[str, int], str] = {}
     for color in ("white", "black"):
         rows = conn.execute(
-            "SELECT gm.ply, gm.move, COUNT(*) AS n FROM game_moves gm "
-            "JOIN (SELECT id FROM games WHERE opponent = ? AND color = ? "
+            "SELECT gm.ply, gm.move FROM game_moves gm "
+            "JOIN (SELECT id, created_at FROM games WHERE opponent = ? AND color = ? "
             "      ORDER BY created_at DESC LIMIT ?) g ON g.id = gm.game_id "
-            "WHERE gm.by_us = 0 AND gm.ply < ? GROUP BY gm.ply, gm.move",
+            "WHERE gm.by_us = 0 AND gm.ply < ? ORDER BY g.created_at DESC",
             (opponent, color, int(settings["model_recent_games"]),
              int(settings["model_pattern_max_ply"]))).fetchall()
-        by_ply: dict[int, list[tuple[int, str]]] = {}
+        by_ply: dict[int, list[str]] = {}
         for row in rows:
-            by_ply.setdefault(row["ply"], []).append((row["n"], row["move"]))
-        for ply, counts in by_ply.items():
-            total = sum(n for n, _ in counts)
-            top_n, top_move = max(counts)
-            if (total >= int(settings["model_pattern_min_games"])
-                    and top_n / total >= float(settings["model_pattern_share"])):
-                patterns[(color, ply)] = top_move
+            by_ply.setdefault(row["ply"], []).append(row["move"])
+        for ply, newest_first in by_ply.items():
+            move = _ply_pattern(newest_first, settings)
+            if move is not None:
+                patterns[(color, ply)] = move
     return patterns
 
 
-def predict_replies(conn: sqlite3.Connection, opponent: str, board: chess.Board,
-                    our_color: chess.Color, patterns: dict[tuple[str, int], str]) -> list[Reply]:
-    """Predicted replies of ``opponent`` (to move in ``board``), most likely first.
+def _ply_pattern(newest_first: list[str], settings: dict) -> str | None:
+    """The opponent's habitual move at one ply (their moves, newest first), or None."""
+    top_move = max(set(newest_first), key=newest_first.count)
+    share = newest_first.count(top_move) / len(newest_first)
+    if (len(newest_first) < int(settings["model_pattern_min_games"])
+            or share < float(settings["model_pattern_share"])):
+        return None
+    latest = newest_first[:int(settings["model_pattern_break_games"])]
+    if latest and top_move not in latest:
+        return None  # dropped recently
+    return top_move
 
-    Exact-position history wins; otherwise the ply pattern, if its move is legal
-    here. An empty list means the model has no prediction.
+
+def _game_weight(age: int, half_life: float) -> float:
+    """Weight of a game ``age`` games old (0 = newest); no decay if ``half_life`` ≤ 0."""
+    if half_life <= 0.0:
+        return 1.0
+    return 0.5 ** (age / half_life)
+
+
+def history_weights(conn: sqlite3.Connection, opponent: str, board: chess.Board,
+                    half_life: float) -> dict[str, float]:
+    """Recency-weighted counts of ``opponent``'s legal moves in ``board``.
+
+    A game's age is its rank among this opponent's games with the same color
+    for us, newest first, so habits fade at the pace that opponent plays us
+    with that color. A move from ``age`` games ago counts
+    ``0.5 ** (age / half_life)``.
     """
     rows = conn.execute(
-        "SELECT gm.move, COUNT(*) AS n FROM game_moves gm JOIN games g ON g.id = gm.game_id "
-        "WHERE g.opponent = ? AND gm.key = ? AND gm.by_us = 0 GROUP BY gm.move ORDER BY n DESC",
+        "SELECT gm.move, r.age FROM game_moves gm JOIN ("
+        "  SELECT id, ROW_NUMBER() OVER (PARTITION BY color ORDER BY created_at DESC) - 1 AS age"
+        "  FROM games WHERE opponent = ?) r ON r.id = gm.game_id "
+        "WHERE gm.key = ? AND gm.by_us = 0",
         (opponent, db.position_key(board))).fetchall()
-    legal = [(r["move"], r["n"]) for r in rows if chess.Move.from_uci(r["move"]) in board.legal_moves]
-    if legal:
-        total = sum(n for _, n in legal)
-        return [Reply(move, n / total, "history") for move, n in legal]
+    weights: dict[str, float] = {}
+    for row in rows:
+        if chess.Move.from_uci(row["move"]) not in board.legal_moves:
+            continue
+        weights[row["move"]] = weights.get(row["move"], 0.0) + _game_weight(row["age"], half_life)
+    return weights
+
+
+def predict_replies(conn: sqlite3.Connection, opponent: str, board: chess.Board,
+                    our_color: chess.Color, patterns: dict[tuple[str, int], str],
+                    half_life: float) -> list[Reply]:
+    """Predicted replies of ``opponent`` (to move in ``board``), most likely first.
+
+    Exact-position history wins, weighted toward recent games
+    ([`history_weights`](#history_weights)); otherwise the ply pattern, if its
+    move is legal here. An empty list means the model has no prediction.
+    """
+    weights = history_weights(conn, opponent, board, half_life)
+    if weights:
+        total = sum(weights.values())
+        ranked = sorted(weights.items(), key=lambda item: (-item[1], item[0]))
+        return [Reply(move, weight / total, "history") for move, weight in ranked]
     color = "white" if our_color == chess.WHITE else "black"
     move = patterns.get((color, board.ply()))
     if move is not None and chess.Move.from_uci(move) in board.legal_moves:
@@ -113,7 +156,13 @@ def model_values(conn: sqlite3.Connection, opponent: str, key: int) -> dict[str,
 
 
 def _reply_signature(replies: list[Reply]) -> str:
-    return " ".join(f"{r.move}:{r.prob:.3f}" for r in replies)
+    """Cache key of a prediction. Probabilities are rounded to
+    ``SIGNATURE_PROB_STEP``, so recency decay drifting them slightly after each
+    game does not force a Stockfish re-run."""
+    def rounded(prob: float) -> float:
+        return round(prob / SIGNATURE_PROB_STEP) * SIGNATURE_PROB_STEP
+
+    return " ".join(f"{r.move}:{rounded(r.prob):.2f}" for r in replies)
 
 
 def _score_candidate(conn: sqlite3.Connection, stockfish: Stockfish, opponent: str,
@@ -122,14 +171,17 @@ def _score_candidate(conn: sqlite3.Connection, stockfish: Stockfish, opponent: s
     """Expected score of ``move`` against the predicted replies, cached by reply set.
 
     Returns None when the model cannot predict the reply (nothing to add over
-    the generic book).
+    the generic book), and deletes any value stored from an earlier prediction.
     """
     after = board.copy()
     after.push(move)
-    replies = predict_replies(conn, opponent, after, our_color, patterns)
-    if not replies:
-        return None
+    replies = predict_replies(conn, opponent, after, our_color, patterns,
+                              float(settings["model_half_life_games"]))
     key = db.position_key(board)
+    if not replies:
+        conn.execute("DELETE FROM opponent_model WHERE opponent = ? AND key = ? AND move = ?",
+                     (opponent, key, move.uci()))  # a stale prediction must not keep weighting
+        return None
     signature = _reply_signature(replies)
     cached = conn.execute("SELECT expected, replies FROM opponent_model WHERE opponent = ? "
                           "AND key = ? AND move = ?", (opponent, key, move.uci())).fetchone()
@@ -160,12 +212,31 @@ def _position_value(stockfish: Stockfish, board: chess.Board, nodes: int,
     return stockfish.position_expected(board, nodes, our_color)
 
 
+def black_roots(conn: sqlite3.Connection, opponent: str, patterns: dict[tuple[str, int], str],
+                settings: dict) -> list[chess.Board]:
+    """Positions after each first move ``opponent`` plays as White with a
+    predicted probability of at least ``model_root_min_prob``, most likely
+    first. An opponent who mixes first moves gets every main one modelled."""
+    min_prob = float(settings["model_root_min_prob"])
+    first = predict_replies(conn, opponent, chess.Board(), chess.BLACK, patterns,
+                            float(settings["model_half_life_games"]))
+    roots = []
+    for reply in first:
+        if reply.prob < min_prob and roots:
+            break
+        root = chess.Board()
+        root.push(chess.Move.from_uci(reply.move))
+        roots.append(root)
+    return roots
+
+
 def deepen(conn: sqlite3.Connection, stockfish: Stockfish, opponent: str, settings: dict,
            ensure_candidates: Callable[[chess.Board], None]) -> int:
     """Walk the predicted lines against ``opponent`` and refresh the model values.
 
     Breadth-first from the start position for each of our colors (as Black, the
-    root is after their predicted first move). At each of our positions below
+    roots are after each likely first move of theirs, see
+    [`black_roots`](#black_roots)). At each of our positions below
     ``max_book_ply`` it makes sure the position has candidates
     (``ensure_candidates`` runs Stockfish if needed), scores every enabled
     candidate against the predicted replies, and continues along the
@@ -178,11 +249,7 @@ def deepen(conn: sqlite3.Connection, stockfish: Stockfish, opponent: str, settin
     max_ply = int(settings["max_book_ply"])
     branch = int(settings["model_branch"])
     frontier: list[tuple[chess.Board, chess.Color]] = [(chess.Board(), chess.WHITE)]
-    first = predict_replies(conn, opponent, chess.Board(), chess.BLACK, patterns)
-    if first:
-        black_root = chess.Board()
-        black_root.push(chess.Move.from_uci(first[0].move))
-        frontier.append((black_root, chess.BLACK))
+    frontier += [(root, chess.BLACK) for root in black_roots(conn, opponent, patterns, settings)]
     expanded = 0
     seen: set[tuple[int, bool]] = set()
     while frontier and expanded < budget:

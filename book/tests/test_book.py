@@ -354,11 +354,60 @@ class OpponentModelTests(DbTestCase):
         self.store(raw_game("x", "e4 e5 f4 Nc6", True, "white", "bong", created_at=99))
         board = selector.board_from_moves(("e2e4", "e7e5", "f2f4"))
         patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
-        replies = opponent_model.predict_replies(self.conn, "bong", board, chess.WHITE, patterns)
+        half_life = float(self.settings["model_half_life_games"])
+        replies = opponent_model.predict_replies(self.conn, "bong", board, chess.WHITE, patterns,
+                                                 half_life)
         self.assertEqual((replies[0].move, replies[0].source), ("b8c6", "history"))
         fresh = selector.board_from_moves(("e2e4", "e7e5", "d2d4"))
-        replies = opponent_model.predict_replies(self.conn, "bong", fresh, chess.WHITE, patterns)
+        replies = opponent_model.predict_replies(self.conn, "bong", fresh, chess.WHITE, patterns,
+                                                 half_life)
         self.assertEqual((replies[0].move, replies[0].source), ("e8e7", "pattern"))
+
+    def switch_first_move(self, old_games: int, new_games: int) -> None:
+        """'bong' as White plays 1.e4 for ``old_games`` games, then 1.e3."""
+        for i in range(old_games):
+            self.store(raw_game(f"old{i}", "e4 d5 Ke2", False, "white", "bong", created_at=i + 1))
+        for i in range(new_games):
+            self.store(raw_game(f"new{i}", "e3 e5 d4", False, "black", "bong",
+                                created_at=old_games + i + 1))
+
+    def first_moves(self, half_life: float) -> list[opponent_model.Reply]:
+        return opponent_model.predict_replies(self.conn, "bong", chess.Board(), chess.BLACK, {},
+                                              half_life)
+
+    def test_recent_switch_outweighs_long_history(self) -> None:
+        self.switch_first_move(old_games=6, new_games=3)
+        self.assertEqual(self.first_moves(half_life=3.0)[0].move, "e2e3")
+        undecayed = self.first_moves(half_life=0.0)
+        self.assertEqual(undecayed[0].move, "e2e4")
+        self.assertAlmostEqual(undecayed[0].prob, 6 / 9)
+
+    def test_dropped_habit_stops_being_a_pattern(self) -> None:
+        self.switch_first_move(old_games=12, new_games=2)
+        patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
+        self.assertEqual(patterns[("black", 2)], "e1e2")  # two deviations: habit kept
+        self.store(raw_game("new2", "e3 e5 d4", False, "black", "bong", created_at=100))
+        patterns = opponent_model.ply_patterns(self.conn, "bong", self.settings)
+        self.assertNotIn(("black", 2), patterns)  # 12/15 still ≥ 80 %, but the last 3 all deviate
+
+    def test_deepen_deletes_value_of_lost_prediction(self) -> None:
+        self.switch_first_move(old_games=12, new_games=3)
+        moves = ("e2e3",)
+        self.add_candidate(moves, "d7d5", 0, 0.5)
+        key = db.position_key(selector.board_from_moves(moves))
+        self.conn.execute("INSERT INTO opponent_model VALUES('bong', ?, 'd7d5', 0.95, 'e1e2', 1.0, "
+                          "'pattern', 'e1e2:1.00', 0)", (key,))
+        self.settings["max_book_ply"] = 2
+        opponent_model.deepen(self.conn, FakeStockfish({}), "bong", self.settings, lambda board: None)
+        self.assertEqual(opponent_model.model_values(self.conn, "bong", key), {})
+
+    def test_black_roots_cover_old_and_new_first_move(self) -> None:
+        self.switch_first_move(old_games=6, new_games=2)
+        roots = opponent_model.black_roots(self.conn, "bong", {}, self.settings)
+        self.assertEqual(sorted(r.peek().uci() for r in roots), ["e2e3", "e2e4"])
+        self.settings["model_root_min_prob"] = 0.9
+        roots = opponent_model.black_roots(self.conn, "bong", {}, self.settings)
+        self.assertEqual(len(roots), 1)  # the most likely move is always modelled
 
     def test_deepen_scores_moves_against_predicted_reply(self) -> None:
         bongcloud_history(self)

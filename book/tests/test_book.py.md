@@ -96,6 +96,10 @@ and `FakeStockfish` (scores looked up by board FEN).
 - `test_ply_patterns_found`: the four Bongcloud plies are detected as patterns.
 - `test_inconsistent_ply_is_not_a_pattern`: plies they never play, or play inconsistently, are not patterns.
 - `test_history_beats_pattern`: an actually-seen reply in this exact position beats the ply pattern; a new position falls back to the pattern.
+- `test_recent_switch_outweighs_long_history`: after six 1.e4 games and three 1.e3 games, recency decay predicts 1.e3; with decay off (`half_life` 0) it predicts 1.e4 at 6/9.
+- `test_dropped_habit_stops_being_a_pattern`: after twelve 2.Ke2 games, two deviating games keep the `("black", 2)` pattern; a third drops it, although 12/15 still meets the 80 % share.
+- `test_deepen_deletes_value_of_lost_prediction`: a stored 1.e3 d5 value predicted from the dropped 2.Ke2 habit is deleted once deepen can no longer predict a reply there.
+- `test_black_roots_cover_old_and_new_first_move`: two games into a switch, both 1.e4 and 1.e3 are deepen roots; with a high `model_root_min_prob` only the most likely one is.
 - `test_deepen_scores_moves_against_predicted_reply`: `deepen` scores 2.f4 by the position after the predicted 2...Ke7; a second run with unchanged predictions makes no Stockfish calls.
 - `test_model_reweights_and_promotes_for_that_opponent_only`: a modelled tier-2 move becomes playable and outranks the tier-0 move against that opponent, but stays locked for others.
 - `test_predictable_opponent_auto_queues_deepen`: storing games of a predictable opponent queues one `deepen` job.
