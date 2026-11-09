@@ -88,6 +88,7 @@ public:
     void run() {
         while (!progress_.reached()) {
             tt_.clear();
+            histories_.clear();
             const Board start = randomOpening();
             game_.reset(start);
             const Outcome outcome = playGame(start);
@@ -100,12 +101,12 @@ public:
     }
 
 private:
-    // A fresh Searcher per move, exactly as the UCI `go` handler builds one (with the
-    // default, embedded network), so the data reflects the engine as it plays. Emplaced in
-    // place; with NNUE its accumulator stack is the one allocation per move, negligible
-    // beside a 5k-node search.
+    // A fresh Searcher per move over the game's TT and histories, exactly as the UCI `go`
+    // handler builds one (with the default, embedded network), so the data reflects the
+    // engine as it plays. Emplaced in place; with NNUE its accumulator stack is the one
+    // allocation per move, negligible beside a 5k-node search.
     SearchResult searchPosition(const Board& board) {
-        searcher_.emplace(state_, tt_, Tunables{}, nnue::embeddedNetwork());
+        searcher_.emplace(state_, tt_, Tunables{}, nnue::embeddedNetwork(), &histories_);
         const Move move =
             searcher_->think(board, limits_, /*printBest=*/false, /*printInfo=*/false);
         return {move, searcher_->score()};
@@ -156,6 +157,7 @@ private:
     std::atomic<SearchState> state_{
         SearchState::Running}; // never stopped: node limits end each search
     TranspositionTable      tt_{HASH_MB};
+    SearchHistories         histories_; // cleared with the TT at each new game
     std::optional<Searcher> searcher_;
     Limits                  limits_;
     viriformat::Game        game_;

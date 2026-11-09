@@ -2,8 +2,9 @@
 
 Functional tests for the **Phase 1c main-search extensions** —
 [singular extensions](../src/search.hpp.md#searchersearch) — the **Phase 1d whole-node
-forward pruning** (razoring, ProbCut), and the **Phase 2 datagen hooks** (the soft node
-budget and the root-score getter), exercised through the public
+forward pruning** (razoring, ProbCut), the **Phase 2 datagen hooks** (the soft node
+budget and the root-score getter), and **lent search histories**, exercised through the
+public
 [`Searcher`](../src/search.hpp.md#class-searcher). Singular extensions change how the
 search *allocates depth*, not the result on a clear tactic, so there is no table to assert
 against directly; the suite validates them behaviourally instead:
@@ -104,3 +105,12 @@ abort, ends it).
 back-rank mate is exactly `mate_in(1)`. Searching the hanging-queen position next with the
 **same** `Searcher` gives a positive non-mate score (`exd5` leaves a lone pawn against a
 bare king), proving the previous search's score is replaced rather than carried over.
+
+### `lent SearchHistories carry what one search learned into the next`
+
+Depth-6 startpos searches on a cleared TT each time. Two searchers with their own tables
+visit the same number of nodes (a fresh searcher starts from nothing). A searcher lent
+an empty [`SearchHistories`](../src/search.hpp.md#struct-searchhistories) matches them
+too, and leaves a non-zero butterfly score on some White root move. A second searcher
+lent the now-warm tables walks a **different** tree (its ordering is steered by what the
+first learned), and after `SearchHistories::clear` a third is back to the fresh count.

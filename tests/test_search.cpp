@@ -140,3 +140,49 @@ TEST_CASE("score reports the last completed iteration") {
     CHECK(searcher.score() > 0);
     CHECK_FALSE(is_mate(searcher.score()));
 }
+
+TEST_CASE("lent SearchHistories carry what one search learned into the next") {
+    std::atomic<SearchState> state{SearchState::Running};
+    TranspositionTable       tt(8);
+    Limits                   limits;
+    limits.depth = 6;
+
+    // Fresh tables, twice: a searcher without lent histories starts from nothing, so the
+    // same search (on a cleared TT) visits the same nodes.
+    auto freshNodes = [&]() {
+        tt.clear();
+        Searcher searcher(state, tt);
+        searcher.think(Board(), limits, /*printBest=*/false, /*printInfo=*/false);
+        return searcher.nodes();
+    };
+    const uint64_t fresh = freshNodes();
+    CHECK(freshNodes() == fresh);
+
+    // Lent tables keep what the first search learned.
+    SearchHistories histories;
+    tt.clear();
+    Searcher first(state, tt, Tunables{}, nullptr, &histories);
+    first.think(Board(), limits, /*printBest=*/false, /*printInfo=*/false);
+    CHECK(first.nodes() == fresh); // empty lent tables behave exactly like fresh ones
+
+    Movelist moves;
+    movegen::legalmoves(moves, Board());
+    bool learned = false;
+    for (const Move m : moves)
+        learned = learned || histories.moves.quietScore(Color::WHITE, m) != 0;
+    CHECK(learned);
+
+    // A second search over the warm tables (same position, cleared TT) is steered by
+    // them, so it walks a different tree.
+    tt.clear();
+    Searcher second(state, tt, Tunables{}, nullptr, &histories);
+    second.think(Board(), limits, /*printBest=*/false, /*printInfo=*/false);
+    CHECK(second.nodes() != fresh);
+
+    // Clearing the tables returns to the fresh search.
+    histories.clear();
+    tt.clear();
+    Searcher third(state, tt, Tunables{}, nullptr, &histories);
+    third.think(Board(), limits, /*printBest=*/false, /*printInfo=*/false);
+    CHECK(third.nodes() == fresh);
+}

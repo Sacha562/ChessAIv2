@@ -46,6 +46,10 @@ private:
     // Shared transposition table (persists across moves); sized by the Hash option.
     TranspositionTable tt_{16};
 
+    // Move-ordering and eval-correction tables, lent to every search so what one move
+    // learned carries into the next; cleared by `ucinewgame`.
+    SearchHistories histories_;
+
     // Options.
     int hashMb_  = 16;
     int threads_ = 1; // accepted now, wired to Lazy SMP in Phase 1d.
@@ -153,7 +157,7 @@ void Engine::handleGo(std::istringstream& is) {
     const Tunables       tp       = tunables_;
     const nnue::Network* net      = useNnue_ ? activeNetwork() : nullptr;
     searchThread_                 = std::thread([this, snapshot, limits, tp, net]() mutable {
-        Searcher searcher(state_, tt_, tp, net);
+        Searcher searcher(state_, tt_, tp, net, &histories_);
         searcher.think(snapshot, limits, /*printBest=*/true, /*printInfo=*/true);
     });
 }
@@ -385,6 +389,7 @@ void Engine::loop() {
         } else if (token == "ucinewgame") {
             stopSearch();
             tt_.clear();
+            histories_.clear();
             board_ = Board(constants::STARTPOS);
         } else if (token == "position") {
             stopSearch();

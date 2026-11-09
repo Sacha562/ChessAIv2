@@ -107,6 +107,7 @@ One generator thread's private state, heap-allocated (it embeds a multi-megabyte
 | `rng_` | `std::mt19937_64` | Drives the random openings. |
 | `state_` | `std::atomic<SearchState>` | The [`SearchState`](search.hpp.md#enum-class-searchstate) its searches poll; always `Running` (node limits end each search). |
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | `HASH_MB` (16) MB, cleared at the start of every game so games are independent. |
+| `histories_` | [`SearchHistories`](search.hpp.md#struct-searchhistories) | Move-ordering and correction history, lent to every move's searcher and cleared with `tt_` at the start of every game. |
 | `searcher_` | `std::optional<Searcher>` | Re-emplaced for each move (see below). |
 | `limits_` | [`Limits`](search.hpp.md#struct-limits) | `softNodes = config.softNodes`, `nodes = softNodes × HARD_NODE_FACTOR`. |
 | `game_` | [`viriformat::Game`](viriformat.hpp.md#class-game) | The game being recorded, reused across games. |
@@ -126,9 +127,9 @@ One generator thread's private state, heap-allocated (it embeds a multi-megabyte
    add its positions to the shared counter.
 
 **One Searcher per move.** `searchPosition` emplaces a fresh
-[`Searcher`](search.hpp.md#class-searcher) (cleared history and correction history) for
-every move, exactly as the UCI `go` handler does, so the data reflects the engine as it
-plays; only the TT carries over between the moves of one game. It gets the default,
+[`Searcher`](search.hpp.md#class-searcher) for every move, lent the worker's
+`histories_`, exactly as the UCI `go` handler does, so the data reflects the engine as it
+plays; the TT and the learned histories carry over between the moves of one game. It gets the default,
 [embedded network](nnue.hpp.md#embeddednetwork) (nullptr, the HCE, in a build without one).
 `std::optional::emplace` rebuilds it in place; with NNUE its ~258 KB accumulator stack is the
 one allocation per move, negligible beside a 5k-node search. It runs

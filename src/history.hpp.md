@@ -78,7 +78,10 @@ is what [`qsearch`](search.hpp.md#searcherqsearch) passes.
 ### `class History`
 
 Cutoff-driven move-ordering memory. Default-constructed empty (all-zero history,
-all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
+all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean. Inside a
+[`SearchHistories`](search.hpp.md#struct-searchhistories) it can outlive one search: the
+UCI engine keeps it for a whole game, and each search calls
+[`clearKillers`](#historyclearkillers) so only the ply-indexed killers start over.
 
 | Member | Type | Description |
 |--------|------|-------------|
@@ -89,7 +92,8 @@ all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
 | `continuation_` | `std::unique_ptr<ContTable>` | Continuation-history table `[priorPiece][priorTo][movedPiece][movedTo]` of `int16_t`, each bounded to `±MAX_HISTORY`. **Heap-owned** (~1.13 MB) — the `Searcher`/`History` lives on the search thread's stack, too small for it inline. |
 | `useKillers_` / `useHistory_` / `useCounter_` / `useContHist_` / `useCaptureHist_` | `bool` | Per-signal on/off (default on); set by [`setEnabled`](#historysetenabled). |
 
-**Methods:** [`clear`](#historyclear), [`setEnabled`](#historysetenabled),
+**Methods:** [`clear`](#historyclear), [`clearKillers`](#historyclearkillers),
+[`setEnabled`](#historysetenabled),
 [`quietScore`](#historyquietscore), [`killer`](#historykiller),
 [`counter`](#historycounter), [`continuationScore`](#historycontinuationscore),
 [`quietHistory`](#historyquiethistory), [`captureScore`](#historycapturescore),
@@ -97,7 +101,8 @@ all-`NO_MOVE` killers/counters) via `clear()`, so a fresh search starts clean.
 [`updateCaptureCutoff`](#historyupdatecapturecutoff) (public); `counterIndex`,
 `victimIndex`, `updateContinuation` (private helpers).
 
-**Used by:** [`Searcher`](search.hpp.md#class-searcher) (owns one; its move loop reads
+**Used by:** [`Searcher`](search.hpp.md#class-searcher) (through its
+[`SearchHistories`](search.hpp.md#struct-searchhistories), lent or its own; its move loop reads
 [`quietHistory`](#historyquiethistory) for history pruning / LMR),
 [`orderMoves`](movepick.hpp.md#ordermoves) (reads the queries).
 
@@ -109,7 +114,18 @@ Reset every table to empty. Called by the constructor; available for reuse/tests
 `butterfly_` and the `continuation_` table are zeroed; every killer and countermove slot
 is set to `Move::NO_MOVE`. Does **not** touch the `setEnabled` toggles (they are
 configuration, not per-search state). The constructor allocates `continuation_` (via
-`std::make_unique`) before calling `clear`.
+`std::make_unique`) before calling `clear`. Called by the UCI engine on `ucinewgame`
+and by datagen at each new game, through
+[`SearchHistories::clear`](search.hpp.md#struct-searchhistories).
+
+### `History::clearKillers`
+
+Reset every killer slot to `Move::NO_MOVE`, leaving butterfly, capture, continuation
+history and countermoves untouched. Killers are indexed by ply from the root, so they
+describe the last search's tree, not the next one's; everything else is keyed by the
+move (and its context) and stays valid across searches. Called at the start of every
+[`Searcher::think`](search.hpp.md#searcherthink) (a no-op on a fresh `History`), and by
+[`clear`](#historyclear).
 
 ### `History::setEnabled`
 

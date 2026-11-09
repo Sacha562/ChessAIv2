@@ -44,6 +44,7 @@ and run by [`run_uci`](#run_uci).
 | `state_` | `std::atomic<`[`SearchState`](search.hpp.md#enum-class-searchstate)`>` | Search lifecycle shared with the [`Searcher`](search.hpp.md#class-searcher), which only reads it. Written here (`go` / `go ponder` / `ponderhit` / stop), each write followed by `notify_all()` to wake a search waiting to report. `Running` between searches. |
 | `searchThread_` | `std::thread` | Background thread running the current search. |
 | `tt_` | [`TranspositionTable`](tt.hpp.md#class-transpositiontable) | The shared TT (default 16 MB), passed by reference to each [`Searcher`](search.hpp.md#class-searcher); persists across moves. |
+| `histories_` | [`SearchHistories`](search.hpp.md#struct-searchhistories) | Move-ordering history and correction history, lent to every [`Searcher`](search.hpp.md#class-searcher) so what one move's search learned carries into the next (killers excepted); cleared by `ucinewgame`. |
 | `hashMb_` | `int` | `Hash` option (MB); resizes `tt_` on change. |
 | `threads_` | `int` | `Threads` option; accepted now, wired to Lazy SMP in Phase 1d. |
 | `fileNet_` | `std::unique_ptr<`[`nnue::Network`](nnue.hpp.md#struct-network)`>` | A network loaded by the `EvalFile` option, overriding the [embedded one](nnue.hpp.md#embeddednetwork); empty by default. Replaced only after [`stopSearch`](#enginestopsearch), so the pointer a running [`Searcher`](search.hpp.md#class-searcher) holds stays valid. |
@@ -81,7 +82,8 @@ Parse a `go` command into a [`Limits`](search.hpp.md#struct-limits) (the `ponder
 token sets `Limits::ponder`), set `state_` to `Pondering` for `go ponder` or `Running`
 otherwise, snapshot the board and the current
 [`Tunables`](search.hpp.md#struct-tunables), and launch a
-[`Searcher`](search.hpp.md#class-searcher) — sharing `tt_` by reference, and given
+[`Searcher`](search.hpp.md#class-searcher) — sharing `tt_` by reference, lending it
+`histories_`, and given
 [`activeNetwork`](#engineactivenetwork-internal) when `useNnue_` is on (else `nullptr`, the hand-crafted eval) — on
 `searchThread_`. The search runs on the snapshot copy so the main thread can keep
 reading input.
@@ -152,8 +154,9 @@ ignored (caught). Other option names are accepted and ignored for now — includ
 offer pondering; the engine needs no state for it, since the GUI decides when to send
 `go ponder`.
 
-`ucinewgame` clears the TT ([`tt_.clear`](tt.hpp.md#transpositiontableclear)) after
-stopping any search, so a fresh game starts with an empty table.
+`ucinewgame` clears the TT ([`tt_.clear`](tt.hpp.md#transpositiontableclear)) and the
+learned `histories_` ([`SearchHistories::clear`](search.hpp.md#struct-searchhistories))
+after stopping any search, so a fresh game starts with empty tables.
 
 ### `Engine::loadEvalFile` (internal)
 

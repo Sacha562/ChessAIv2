@@ -39,13 +39,17 @@ void History::clear() {
     std::memset(butterfly_, 0, sizeof(butterfly_));
     std::memset(capture_, 0, sizeof(capture_));
     std::memset(continuation_->v, 0, sizeof(continuation_->v));
+    clearKillers();
+    for (auto& c : counters_)
+        c = Move(Move::NO_MOVE);
+}
+
+void History::clearKillers() {
     const Move none = Move(Move::NO_MOVE);
     for (auto& perPly : killers_) {
         perPly[0] = none;
         perPly[1] = none;
     }
-    for (auto& c : counters_)
-        c = none;
 }
 
 int History::quietScore(Color stm, Move move) const {

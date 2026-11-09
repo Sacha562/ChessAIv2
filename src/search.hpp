@@ -166,6 +166,19 @@ struct Tunables {
     int singularDoubleMargin = 44; // extra ply when the verification fails this far under (cp)
 };
 
+// The tables a search learns as it goes: move-ordering history and static-eval
+// correction. A Searcher can borrow one that outlives it, so what one move's search
+// learned keeps steering the next move's; the owner clears it between games.
+struct SearchHistories {
+    History           moves;
+    CorrectionHistory corr;
+
+    void clear() {
+        moves.clear();
+        corr.clear();
+    }
+};
+
 // A single search worker. Iterative deepening over a fail-soft Principal Variation
 // Search (null-window scout + re-search) with a transposition table and soft/hard
 // time management.
@@ -173,10 +186,12 @@ struct Tunables {
 // pondering, and the transposition table is shared (and outlives the searcher) so
 // results persist across moves and, later, across threads. With a network the static
 // eval is NNUE (the network must outlive the searcher); without one it is the HCE.
+// With `histories` the searcher learns into the caller's tables (which must outlive it);
+// without, it learns into its own fresh ones.
 class Searcher {
 public:
     Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp = {},
-             const nnue::Network* net = nullptr);
+             const nnue::Network* net = nullptr, SearchHistories* histories = nullptr);
 
     // Runs the search on a copy of `board`. Prints `info` lines when
     // `printInfo`, and a final `bestmove ... ponder ...` line when `printBest`.
@@ -245,10 +260,12 @@ private:
     // searcher stays small enough for a thread's stack. Allocated only with a network.
     std::unique_ptr<std::array<nnue::Accumulator, MAX_PLY + 1>> accumulators_;
     uint64_t                                                    nodes_ = 0;
-    History           history_;                // quiet-move ordering heuristics (per search)
-    CorrectionHistory corrHist_;               // learned static-eval correction (per search)
-    Value             staticEvals_[MAX_PLY]{}; // per-ply static eval, for RFP/futility/improving
-    uint8_t           reductions_[LMR_DIM][LMR_DIM]{}; // LMR reduction table (see buildReductions)
+    std::unique_ptr<SearchHistories> ownHistories_; // allocated only when none were lent
+    SearchHistories&                 histories_;    // the lent tables, or *ownHistories_
+    History&                         history_  = histories_.moves; // move-ordering history
+    CorrectionHistory&               corrHist_ = histories_.corr;  // static-eval correction
+    Value   staticEvals_[MAX_PLY]{};         // per-ply static eval, for RFP/futility/improving
+    uint8_t reductions_[LMR_DIM][LMR_DIM]{}; // LMR reduction table (see buildReductions)
 
     // Per-ply record of the move played into the next ply (colour+type piece 0..11 and
     // its to-square 0..63), or -1 for none / a null move — the search "stack" that feeds

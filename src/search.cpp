@@ -142,8 +142,10 @@ std::string scoreToUci(Value v) {
 } // namespace
 
 Searcher::Searcher(std::atomic<SearchState>& state, TranspositionTable& tt, Tunables tp,
-                   const nnue::Network* net)
-    : state_(state), tt_(tt), tp_(tp), net_(net) {
+                   const nnue::Network* net, SearchHistories* histories)
+    : state_(state), tt_(tt), tp_(tp), net_(net),
+      ownHistories_(histories ? nullptr : std::make_unique<SearchHistories>()),
+      histories_(histories ? *histories : *ownHistories_) {
     if (net_) accumulators_ = std::make_unique<std::array<nnue::Accumulator, MAX_PLY + 1>>();
 }
 
@@ -830,6 +832,7 @@ Move Searcher::think(Board board, const Limits& limits, bool printBest, bool pri
     nodes_  = 0;
     timeUp_ = false;
     tt_.newSearch();
+    history_.clearKillers();
     history_.setEnabled(tp_.useKillers, tp_.useHistory, tp_.useCountermove, tp_.useContHist,
                         tp_.useCaptureHist);
     corrHist_.setWeights({tp_.corrPawnWeight, tp_.corrNonPawnWeight, tp_.corrMinorWeight,

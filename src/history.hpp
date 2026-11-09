@@ -57,6 +57,10 @@ public:
     // Reset every table to empty (all-zero history, all-NO_MOVE killers/counters).
     void clear();
 
+    // Forget the killers only. They are indexed by ply from the root, so they describe
+    // the last search's tree, not the next one's; the rest of the history carries over.
+    void clearKillers();
+
     // Enable/disable each signal independently. A disabled signal returns "empty" from
     // its query (so it has no ordering effect) while still being updated cheaply. Used
     // to A/B-isolate each heuristic's Elo via UCI toggles; all default on.

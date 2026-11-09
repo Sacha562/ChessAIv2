@@ -294,3 +294,21 @@ TEST_CASE("a continuation-history quiet floats above a neutral quiet") {
     const Move neutral = parse(b, "a2a3"); // never rewarded under `ctx`
     CHECK(rankOf(ml, good) < rankOf(ml, neutral));
 }
+
+TEST_CASE("clearKillers forgets the killers but keeps the history") {
+    History     h;
+    const Board b(STARTPOS);
+    const Move  e3 = parse(b, "e2e3");
+    const Move  d3 = parse(b, "d2d3");
+
+    cutoff(h, b, e3, NONE, {d3});
+    REQUIRE(h.killer(0, 0) == e3);
+    const int learned = h.quietScore(Color::WHITE, e3);
+    REQUIRE(learned > 0);
+
+    h.clearKillers();
+    CHECK(h.killer(0, 0) == NONE);
+    CHECK(h.killer(0, 1) == NONE);
+    CHECK(h.quietScore(Color::WHITE, e3) == learned); // what was learned survives
+    CHECK(h.quietScore(Color::WHITE, d3) < 0);
+}

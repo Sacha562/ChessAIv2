@@ -50,7 +50,8 @@ a [transposition table](tt.hpp.md).
 
 ## Namespace
 
-- Public API (`SearchState`, `Limits`, `Tunables`, `Searcher`) in namespace `engine`.
+- Public API (`SearchState`, `Limits`, `Tunables`, `SearchHistories`, `Searcher`) in
+  namespace `engine`.
 - `MOVE_OVERHEAD_MS`, `TIME_CHECK_MASK`, `ONLY_MOVE_MAX_DEPTH` (root depth cap for a
   timed search with a single legal move), `scoreToUci`, and the **structural**
   selective-search gates — `IIR_MIN_DEPTH`, `TT_CUTOFF_MAX_HALFMOVE`, `NMP_MIN_DEPTH` /
@@ -268,6 +269,25 @@ for per-signal A/B isolation.
 
 **Used by:** [`Searcher`](#class-searcher) (constructor), [`Searcher::setupTiming`](#searchersetuptiming), [`Searcher::qsearch`](#searcherqsearch), [`Searcher::think`](#searcherthink), [`Searcher::search`](#searchersearch), [`evaluate`](eval.hpp.md#evaluate), [uci](uci.hpp.md#enginehandlesetoption)
 
+### `struct SearchHistories`
+
+The tables a search **learns** as it goes, bundled so they can outlive one search: what
+one move's search learned keeps steering the next move's. The [uci](uci.hpp.md) `Engine`
+owns one for the whole game and lends it to every `go` (cleared by `ucinewgame`);
+[datagen](datagen.hpp.md) owns one per worker, cleared at each new game. A
+[`Searcher`](#class-searcher) given none builds its own, empty — what
+[bench](bench.hpp.md) and the tests rely on, so `bench` is unchanged.
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `moves` | [`History`](history.hpp.md#class-history) | Move-ordering history: butterfly, capture and continuation history, countermoves, killers (~1.2 MB, mostly the heap-owned continuation table). Killers are reset at every [`think`](#searcherthink); the rest carries over. |
+| `corr` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Static-eval correction (five tables, ~330 KB heap-owned). Carries over whole. |
+
+**Methods:** `clear()` — empties both ([`History::clear`](history.hpp.md#historyclear),
+[`CorrectionHistory::clear`](corrhist.hpp.md#correctionhistoryclear)).
+
+**Used by:** [`Searcher`](#class-searcher), [uci](uci.hpp.md), [datagen](datagen.hpp.md).
+
 ### `class Searcher`
 
 One search worker: one instance per search. Constructed with a shared
@@ -279,7 +299,10 @@ can stop it mid-search or end its pondering), a
 just want the defaults), and an optional [`nnue::Network`](nnue.hpp.md#struct-network)
 pointer: with a network the static eval is NNUE, without one (the default, and what
 [bench](bench.hpp.md) and [datagen](datagen.hpp.md) pass) it is the hand-crafted
-[`evaluate`](eval.hpp.md#evaluate). See [`Searcher::Searcher`](#searchersearcher).
+[`evaluate`](eval.hpp.md#evaluate), and an optional
+[`SearchHistories*`](#struct-searchhistories): lent tables it learns into (and that
+outlive it), or `nullptr` for its own fresh ones. See
+[`Searcher::Searcher`](#searchersearcher).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -289,8 +312,10 @@ pointer: with a network the static eval is NNUE, without one (the default, and w
 | `net_` | `const `[`nnue::Network`](nnue.hpp.md#struct-network)`*` | The NNUE network, **not owned** (the [uci](uci.hpp.md#class-engine-internal) `Engine` owns it and keeps it alive for the search); `nullptr` selects the hand-crafted eval. |
 | `accumulators_` | `std::unique_ptr<std::array<`[`nnue::Accumulator`](nnue.hpp.md#struct-accumulator)`, MAX_PLY + 1>>` | One accumulator per ply (index = ply, 2 KB each, ~258 KB total). Heap-allocated once in the constructor, and only when `net_` is set, so the searcher stays small enough for a thread's stack. Entry 0 is refreshed from the root in [`think`](#searcherthink); every make writes entry `ply + 1`. |
 | `nodes_` | `uint64_t` | Nodes visited in the current search. |
-| `history_` | [`History`](history.hpp.md) | Quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves) for this search. |
-| `corrHist_` | [`CorrectionHistory`](corrhist.hpp.md#class-correctionhistory) | Learned static-eval correction for this search (five tables, ~330 KB heap-owned by the history, zeroed on construction). |
+| `ownHistories_` | `std::unique_ptr<`[`SearchHistories`](#struct-searchhistories)`>` | The searcher's own tables, allocated (empty) only when the constructor was lent none; `nullptr` otherwise. |
+| `histories_` | [`SearchHistories&`](#struct-searchhistories) | The tables this search reads and teaches: the lent ones, or `*ownHistories_`. |
+| `history_` | [`History&`](history.hpp.md) | Alias of `histories_.moves`: quiet-move ordering heuristics (killers, butterfly + continuation history, countermoves). |
+| `corrHist_` | [`CorrectionHistory&`](corrhist.hpp.md#class-correctionhistory) | Alias of `histories_.corr`: learned static-eval correction (five tables). |
 | `staticEvals_` | `Value[MAX_PLY]` | Per-ply static eval, for RFP / futility / the `improving` trend. `VALUE_NONE` at in-check plies. |
 | `reductions_` | `uint8_t[LMR_DIM][LMR_DIM]` | LMR reduction table (`LMR_DIM` = 64), rebuilt from the tunable base/divisor each search by [`buildReductions`](#searcherbuildreductions). |
 | `contPiece_` / `contTo_` | `int[MAX_PLY]` | Per-ply search stack: the colour+type piece (0–11) and to-square (0–63) of the move played into the next ply (`-1` for none / a null move). Written just before each recursion (by q-search too); read as `[ply-1]` / `[ply-2]` to build a node's continuation context, and as `[ply-1]` for its correction-history continuation slot ([`corrSlots`](#searchercorrslots)). |
@@ -351,7 +376,10 @@ the same [`awaitRelease`](#searcherawaitrelease) wait).
 **Side Effects:** writes to `std::cout` (`info` / `bestmove`, including a
 `hashfull` field from [`tt_.hashfull()`](tt.hpp.md#transpositiontablehashfull));
 calls [`tt_.newSearch()`](tt.hpp.md#transpositiontablenewsearch) once to advance the
-TT generation; with a network, refreshes `accumulators_[0]` from the root position
+TT generation; clears the killers
+([`History::clearKillers`](history.hpp.md#historyclearkillers)) and teaches the rest of
+[`histories_`](#struct-searchhistories), which a lending caller keeps for its next search;
+with a network, refreshes `accumulators_[0]` from the root position
 ([`nnue::refresh`](nnue.hpp.md#refresh)); resets and updates all timing/node/root-move/PV/ponder members,
 and sets `rootDepth_` before each iteration (the [extension budget](#searchersearch)). Reads
 the shared [`state_`](#enum-class-searchstate) (never writes it); may block on it at the
@@ -693,8 +721,10 @@ discarded by [`think`](#searcherthink) like any incomplete iteration.
 ### `Searcher::Searcher`
 
 Construct a searcher. Stores the shared `state` and `tt` references, copies `tp`, and
-keeps `net` (not owned). With a network it also allocates `accumulators_` (one heap
-allocation per searcher, never per node).
+keeps `net` (not owned). Binds `histories_` to the lent `histories`, or, when none is
+lent, allocates its own empty [`SearchHistories`](#struct-searchhistories) (~1.5 MB, once
+per searcher). With a network it also allocates `accumulators_` (one heap allocation per
+searcher, never per node).
 
 **Parameters:**
 | Name | Type | Description |
@@ -703,6 +733,7 @@ allocation per searcher, never per node).
 | `tt` | [`TranspositionTable&`](tt.hpp.md#class-transpositiontable) | Shared TT; must outlive the searcher. |
 | `tp` | [`Tunables`](#struct-tunables) | Knobs for this search (default `{}`). |
 | `net` | `const `[`nnue::Network`](nnue.hpp.md#struct-network)`*` | NNUE network (default `nullptr` = hand-crafted eval); must outlive the searcher. |
+| `histories` | [`SearchHistories*`](#struct-searchhistories) | Tables to learn into, kept by the caller across searches (default `nullptr` = the searcher's own, fresh); must outlive the searcher. |
 
 ### `Searcher::staticEval` (private)
 

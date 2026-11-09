@@ -125,6 +125,13 @@ With `UseHistory` **and** `UseContHist` off
 after a cutoff that would otherwise reward the move — so a disabled-history binary can
 never history-prune.
 
+### `clearKillers forgets the killers but keeps the history`
+
+After a cutoff, [`clearKillers`](../src/history.hpp.md#historyclearkillers) empties both
+killer slots while the cutoff move's butterfly bonus and the tried quiet's malus are
+unchanged — what lets a game-long `History` start each search without the last tree's
+ply-indexed killers.
+
 ### `a continuation-history quiet floats above a neutral quiet`
 
 With the other quiet signals disabled so only continuation history can move a rank, a
