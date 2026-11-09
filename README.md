@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.6 (NNUE net5, a fourth generation of self-play data) · next: width and king buckets on the 714M positions
+## Status — v0.6.1 (q-search TT + wider correction history on net5) · next: width and king buckets on the 714M positions
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.6.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6.1) | 1d — search | Quiescence search now probes and stores the transposition table, and correction history reads five tables (pawn, non-pawn per colour, minor, major, previous move) with a gravity update instead of one pawn table: **+28.5 Elo** vs v0.6 |
 | [v0.6](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6) | 2 — NNUE (net5) | Fifth net: same shape, with 300M new positions of net4 self-play added to the training data (714M positions in all, every one rescored by Stockfish 19 at 5,000 nodes) and 60% longer training: **+76.2 Elo** vs v0.5.1 |
 | [v0.5.1](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5.1) | 1d — search tune | All fourteen search margins re-tuned for the NNUE eval (they were last tuned on the hand-crafted eval): much tighter reverse futility, a looser q-search delta cushion, deeper null-move reductions, earlier singular extensions: **+34.3 Elo** vs v0.5 at 40+0.4 |
 | [v0.5](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.5) | 2 — NNUE (net4) | Fourth net: same shape, trained only on Stockfish scores (all 414M self-play positions rescored by Stockfish 19 at 5,000 nodes): **+55.7 Elo** vs v0.4 |
@@ -34,9 +35,10 @@ numbers are in [PLAN.md](PLAN.md#project-status).
 ### What the engine does
 
 - **Search:** iterative deepening, fail-soft PVS, aspiration windows, quiescence
-  (captures, SEE pruning, delta pruning), check and singular extensions, IIR.
+  (captures, SEE pruning, delta pruning, shared TT), check and singular extensions, IIR.
 - **Selectivity:** null-move pruning, LMR (log table, history-adjusted), reverse
-  futility, futility, late-move pruning, correction history on the static eval.
+  futility, futility, late-move pruning, correction history on the static eval
+  (pawn, non-pawn, minor, major and previous-move tables).
 - **Move ordering:** TT move → good captures (SEE + MVV-LVA) → killers → countermove
   → butterfly + continuation history → bad captures.
 - **Evaluation:** NNUE by default — a `(768 → 1024)×2` SCReLU network with 8 output
@@ -142,7 +144,7 @@ quit
 | Evaluation | `EvalFile` (default `<embedded>`: the network built into the binary; a path loads another bullet `quantised.bin`), `UseNNUE` (default true; false = hand-crafted eval) |
 | Time | `TimeSoftPermille`, `TimeHardPermille`, `AssumedMovestogo`, `PonderCreditPermille` (share of ponder time not charged to the clock after a `ponderhit`, default 500) |
 | Feature toggles (0/1) | `UseKillers`, `UseHistory`, `UseCountermove`, `UseContHist`, `UseIIR`, `UseNMP`, `UseRFP`, `UseFutility`, `UseLMP`, `UseLMR`, `UseCheckExt`, `UseSingular`, `UseAspiration`, `UseHistLmr`, `UseCorrHist` (all on); `UseHistPrune`, `UseCapHist`, `UseRazoring`, `UseProbCut` (off) |
-| Tunable margins | `LmrBase`, `LmrDivisor`, `NmpBase`, `NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `LmpBase`, `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, `HistPruneMargin`, `HistLmrDiv`, `RazorBase`, `RazorMargin`, `ProbCutMinDepth`, `ProbCutMargin`, `AspirationDelta`, `Tempo`, `DeltaMargin`, `EndgamePieces` |
+| Tunable margins | `LmrBase`, `LmrDivisor`, `NmpBase`, `NmpEvalDiv`, `RfpMargin`, `FutMargin`, `FutBase`, `LmpBase`, `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, `HistPruneMargin`, `HistLmrDiv`, `RazorBase`, `RazorMargin`, `ProbCutMinDepth`, `ProbCutMargin`, `AspirationDelta`, `Tempo`, `DeltaMargin`, `EndgamePieces`; correction-history weights `CorrPawnWeight`, `CorrNonPawnWeight`, `CorrMinorWeight`, `CorrMajorWeight`, `CorrContWeight` (percent, default 100) |
 
 The toggles and margins exist so features can be A/B-tested and SPSA-tuned without
 rebuilding; the defaults are the tested values. Full reference:
