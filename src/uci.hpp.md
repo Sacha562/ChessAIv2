@@ -125,7 +125,8 @@ margins** `LmrBase` / `LmrDivisor` (the LMR reduction curve, ×100), `NmpBase` /
 singular knobs** `SingularMinDepth`, `SingularMargin`, `SingularDoubleMargin`, and the
 **Phase 1d history knobs** `HistPruneMargin` (default `2048`) / `HistLmrDiv` (default
 `6546`, SPSA-tuned), which are in **history-score units** (the quiet band is `±49152`), not
-centipawns, and the **Phase 1d whole-node pruning margins** `RazorBase` (`180`) /
+centipawns, the **node-type LMR knobs** `LmrCutNode` / `LmrTtPv` (plies, 0–3, default `1`;
+`0` turns each off), and the **Phase 1d whole-node pruning margins** `RazorBase` (`180`) /
 `RazorMargin` (`160`) / `ProbCutMinDepth` (`5`) / `ProbCutMargin` (`180`) in cp — all exposed
 as `spin` options so a self-play tuner can perturb them without a rebuild. The defaults are
 the **SPSA-tuned** values: first tuned at the end of Phase 1b (material-only eval, **+82 ±

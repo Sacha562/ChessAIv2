@@ -172,6 +172,8 @@ scales are in **permille** (parts per 1000) of the base per-move slice
 | `singularDoubleMargin` | `int` | `44` | Extend by 2 plies when the verification score falls this far under `singularBeta`, cp (`SingularDoubleMargin`). |
 | `histPruneMargin` | `int` | `2048` | History-pruning threshold per remaining ply (`HistPruneMargin`): a late quiet scoring below `−histPruneMargin·depth` is skipped. History-score units, not cp. |
 | `histLmrDiv` | `int` | `6546` | History score per one ply of LMR adjustment (`HistLmrDiv`); kept `>= 1`. |
+| `lmrCutNode` | `int` | `1` | Extra LMR plies at an expected **cut node** (`LmrCutNode`, 0–3); `0` = off. `1` passed SPRT: +8.9 ± 5.1 Elo vs v0.6.2. |
+| `lmrTtPv` | `int` | `1` | LMR plies taken off at a **ttPv** node — a PV node, or one whose TT entry was stored from a PV (`LmrTtPv`, 0–3); `0` = off. `1` passed SPRT: +5.3 ± 3.7 Elo vs v0.6.2. |
 | `razorBase` | `Value` | `180` | Razoring base margin, cp (`RazorBase`). |
 | `razorMargin` | `Value` | `160` | Razoring margin per remaining ply, cp (`RazorMargin`); the gate is `eval + razorBase + razorMargin·depth <= alpha`. |
 | `probCutMinDepth` | `int` | `5` | Minimum depth at which ProbCut is attempted (`ProbCutMinDepth`). |
@@ -568,7 +570,9 @@ searched exactly.
   table, reduced by one on the PV and one when `improving`, then (when `useHistLmr`)
   adjusted by the move's own history: `reduction -= clamp(histScore / histLmrDiv,
   −HIST_LMR_MAX_PLIES, +HIST_LMR_MAX_PLIES)`, so a quiet with good history is reduced
-  less and one with bad history more. Finally clamped to keep the reduced depth `>= 1`. A
+  less and one with bad history more. By node type, `lmrCutNode` plies are added at an
+  expected cut node and `lmrTtPv` plies taken off at a ttPv node (both `1` by
+  default). Finally clamped to keep the reduced depth `>= 1`. A
   reduced search that beats alpha is re-searched at full `newDepth` (null window), then at
   the full window if it lands in `(alpha, beta)`.
 
@@ -635,6 +639,7 @@ an alpha-raising move, so the reported score stays exact and deterministic.
 | `beta` | `Value` | Upper bound of the search window. |
 | `ply` | `int` | Distance from the root (for mate scoring and root-move tracking). |
 | `prevMove` | `Move` | The move played at the parent node (`Move::NO_MOVE` at the root); keys the countermove and is the malus/history side-to-move context. |
+| `cutNode` | `bool` | The node is expected to **fail high** (a null-window node that is not a PV node). Children alternate: a non-PV node's first move is searched as `!cutNode`, a reduced late-move scout as a cut node (`true`), its full-depth re-search and an unreduced scout as `!cutNode`, the null-move and ProbCut searches as `!cutNode`; PV children and the root are `false`, and a singular verification inherits the node's own value. Feeds the `lmrCutNode` reduction. |
 | `excluded` | `Move` | Move to skip in this node's move loop (defaults to `NO_MOVE`). Set only by a **singular-verification** call — the same node/position searched with the TT move excluded; while set, the TT cutoff and the TT store are both suppressed and singular extensions are not re-attempted. |
 
 **Returns:** [`Value`](types.hpp.md#using-value--int) — the negamax score of
@@ -660,8 +665,9 @@ only legal move, which the caller reads as "singular").
   captures).
 - **Store** after the loop (unless aborted, **and unless `excluded` is set**): `depth`,
   `valueToTT(best, ply)`, the node's **static eval** (`VALUE_NONE` when in check), the best
-  move, and the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`, else
-  `UPPER`. `alphaOrig` is captured before the loop mutates `alpha`. The stored eval is what
+  move, the bound — `LOWER` if `best >= beta`, `EXACT` if `best > alphaOrig`, else
+  `UPPER` — and the node's **`ttPv`** flag (`pvNode` or the probed entry's `wasPv`), so a
+  position that has been on a PV stays marked; q-search and ProbCut stores pass it too. `alphaOrig` is captured before the loop mutates `alpha`. The stored eval is what
   a later probe reuses instead of recomputing [`evaluate`](eval.hpp.md#evaluate). A
   singular-verification result is the value of a **restricted** move set, so it is not
   stored under this position's key.

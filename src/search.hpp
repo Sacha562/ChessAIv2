@@ -152,6 +152,12 @@ struct Tunables {
     int histPruneMargin = 2048; // skip a late quiet scoring below -margin * depth
     int histLmrDiv      = 6546; // history score per one ply of LMR adjustment (>= 1)
 
+    // LMR by node type, in plies; 0 turns each off. An expected cut node reduces its late
+    // quiets more; a ttPv node (a PV node now, or one whose TT entry was stored from a PV)
+    // reduces them less. Both at 1 passed SPRT on their own (+8.9 / +5.3 Elo).
+    int lmrCutNode = 1;
+    int lmrTtPv    = 1;
+
     // Phase 1d whole-node pruning margins (cp).
     Value razorBase       = 180; // razoring base margin
     Value razorMargin     = 160; // razoring margin per remaining ply
@@ -204,8 +210,10 @@ public:
     Value score() const { return rootScore_; }
 
 private:
+    // `cutNode`: a null-window node expected to fail high (the first child of an
+    // expected all-node, or a reduced late move). Always false at PV nodes.
     Value search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
-                 Move excluded = Move(Move::NO_MOVE));
+                 bool cutNode, Move excluded = Move(Move::NO_MOVE));
     Value aspirationSearch(Board& board, int depth, Value prevScore);
     Value qsearch(Board& board, Value alpha, Value beta, int ply);
 

@@ -105,3 +105,9 @@ returns the stored value/move (exercises index math and packing without eviction
 
 Two independent tables driven by the same op sequence yield identical hit counts
 (determinism guard).
+
+### `the pv flag round-trips without disturbing bound or aging`
+
+A store with `pv = true` probes back `wasPv` with its bound intact, a default store
+probes back `wasPv == false`, and after 40 `newSearch` calls (wrapping the 5-bit
+generation) a re-store still keeps both the flag and the bound.

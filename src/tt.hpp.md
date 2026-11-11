@@ -53,6 +53,7 @@ relative to the stored node, so the caller must pass it through
 | `eval` | `Value` | Raw stored static eval (`VALUE_NONE` until Phase 1b uses it). |
 | `depth` | `int` | Search depth the entry was stored at. |
 | `bound` | `Bound` | Bound type of `value`. |
+| `wasPv` | `bool` | The entry was stored from a node that was, or had been, on a PV (the search's `ttPv`). |
 
 ### `class TranspositionTable`
 
@@ -65,9 +66,9 @@ every [`Searcher`](search.hpp.md#class-searcher), so results persist across move
 |-----------------------|-------------|
 | `Entry` | 16 bytes: `key` (Zobrist **XOR** `data`) + `data` (packed payload). |
 | `Cluster` | `alignas(64)` bucket of `CLUSTER_SIZE` (4) entries = one cache line. |
-| `data` layout | LSB→MSB: `move`(16) · `value`(16) · `eval`(16) · `depth`(8) · `genBound`(8), where `genBound` = `generation`(6) << 2 \| `bound`(2). |
+| `data` layout | LSB→MSB: `move`(16) · `value`(16) · `eval`(16) · `depth`(8) · `genBound`(8), where `genBound` = `generation`(5) << 3 \| `pv`(1) << 2 \| `bound`(2). |
 | `table_` | `std::vector<Cluster>` — the entries; RAII, no raw owning pointer. |
-| `generation_` | 6-bit search counter (wraps at 64); tags stores and ages entries. |
+| `generation_` | 5-bit search counter (wraps at 32); tags stores and ages entries. One bit was given up for the `pv` flag; 32 generations is still far more than an entry survives. |
 
 **Used by:** [search](search.hpp.md), [uci](uci.hpp.md), [bench](bench.hpp.md).
 
@@ -95,7 +96,7 @@ Zero every entry and reset the generation. Called on `ucinewgame` and before eac
 
 ### `TranspositionTable::newSearch`
 
-Advance the generation (mod 64) so this search's stores out-rank older entries in
+Advance the generation (mod 32) so this search's stores out-rank older entries in
 replacement. Called once by [`Searcher::think`](search.hpp.md#searcherthink).
 
 ### `TranspositionTable::probe`
@@ -108,7 +109,8 @@ table.
 ### `TranspositionTable::store`
 
 Insert/replace `key`'s entry with `depth`, `value` (already `valueToTT`-adjusted by
-the caller), `eval`, `move`, and `bound`. Slot choice within the cluster: an empty
+the caller), `eval`, `move`, `bound`, and `pv` (default `false`; the search passes its
+`ttPv` so the flag sticks to a position once it has been on a PV). Slot choice within the cluster: an empty
 slot or the same key wins; otherwise the entry worth the least
 (`depth − relativeAge·8`) is evicted. A same-slot store carrying `NO_MOVE`
 preserves the previously stored move. Writes `key XOR data` and `data`.

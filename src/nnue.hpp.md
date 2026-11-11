@@ -65,8 +65,8 @@ releases has no `#embed` (and Clang only offers it as an extension). MSVC has no
 top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
 `embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
 file. The default network is `nets/net5.bin`, committed to the repository
-(1,607,744 bytes, SHA-256 `0bc4b339…0827776a`); the **bench signature with it is 31807
-nodes** (31508 before the q-search TT and the widened correction history; 34410 with net4 after the v0.5.1 search re-tune, 35830 before it; 46936 with
+(1,607,744 bytes, SHA-256 `0bc4b339…0827776a`); the **bench signature with it is 36507
+nodes** (31807 before node-type LMR, 31508 before the q-search TT and the widened correction history; 34410 with net4 after the v0.5.1 search re-tune, 35830 before it; 46936 with
 net3, 42410 with net2). net5 keeps net2's shape and, like net4, trains only on
 **Stockfish scores** (Stockfish 19 at 5,000 nodes per position, scaled by 1.25 onto the
 engine's centipawn scale). It adds a fourth generation of self-play: run4, 300M positions

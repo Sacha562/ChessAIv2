@@ -325,7 +325,7 @@ void Searcher::saveRootPv() {
 }
 
 Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply, Move prevMove,
-                       Move excluded) {
+                       bool cutNode, Move excluded) {
     const bool inSingular = excluded != Move(Move::NO_MOVE);
 
     // A singular verification re-searches this very ply, so it must not wipe the line
@@ -367,6 +367,9 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             if (ttBoundCuts(tt.bound, ttv, alpha, beta)) return ttv;
         }
     }
+    // A PV node now, or one whose TT entry was stored from a PV: such nodes are searched
+    // more carefully (less LMR), and the flag is stored back so it sticks.
+    const bool ttPv = pvNode || (tt.hit && tt.wasPv);
 
     const bool inCheck = board.inCheck();
 
@@ -422,8 +425,8 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
                           std::min<int>((eval - beta) / tp_.nmpEvalDiv, NMP_EVAL_MAX);
             contPiece_[ply] = -1; // a null move leaves the child no continuation context
             makeNullMove(board, ply);
-            const Value nullScore =
-                -search(board, depth - 1 - R, -beta, -beta + 1, ply + 1, Move(Move::NO_MOVE));
+            const Value nullScore = -search(board, depth - 1 - R, -beta, -beta + 1, ply + 1,
+                                            Move(Move::NO_MOVE), !cutNode);
             board.unmakeNullMove();
             if (timeUp_) return VALUE_ZERO;
             if (nullScore >= beta) return is_mate(nullScore) ? beta : nullScore;
@@ -451,13 +454,13 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
                 Value score = -qsearch(board, -probBeta, -probBeta + 1, ply + 1);
                 if (score >= probBeta)
                     score = -search(board, depth - PROBCUT_REDUCTION, -probBeta, -probBeta + 1,
-                                    ply + 1, m);
+                                    ply + 1, m, !cutNode);
                 board.unmakeMove(m);
 
                 if (timeUp_) return VALUE_ZERO;
                 if (score >= probBeta) {
                     tt_.store(key, std::max(depth - PROBCUT_TT_DEPTH_MARGIN, 1),
-                              valueToTT(score, ply), rawEval, m, BOUND_LOWER);
+                              valueToTT(score, ply), rawEval, m, BOUND_LOWER, ttPv);
                     return score;
                 }
             }
@@ -541,10 +544,10 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             (tt.bound == BOUND_LOWER || tt.bound == BOUND_EXACT) && ply + 1 < MAX_PLY - 1) {
             const Value ttValue = valueFromTT(tt.value, ply);
             if (!is_mate(ttValue)) {
-                const Value sBeta = std::max<Value>(ttValue - tp_.singularMargin * depth,
-                                                    VALUE_MATED_IN_MAX_PLY + 1);
-                const Value sScore =
-                    search(board, (depth - 1) / 2, sBeta - 1, sBeta, ply, prevMove, ttMove);
+                const Value sBeta  = std::max<Value>(ttValue - tp_.singularMargin * depth,
+                                                     VALUE_MATED_IN_MAX_PLY + 1);
+                const Value sScore = search(board, (depth - 1) / 2, sBeta - 1, sBeta, ply, prevMove,
+                                            cutNode, ttMove);
                 if (timeUp_) return VALUE_ZERO;
                 if (sScore < sBeta)
                     singularExt = (!pvNode && sScore < sBeta - tp_.singularDoubleMargin) ? 2 : 1;
@@ -576,6 +579,8 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             reduction = lmrReduction(depth, moveCount);
             if (pvNode) --reduction;
             if (improving) --reduction;
+            if (cutNode) reduction += tp_.lmrCutNode;
+            if (ttPv) reduction -= tp_.lmrTtPv;
             // History adjustment: reduce a well-scored quiet less and a badly scored one
             // more, bounded so the curve still governs the reduction.
             if (tp_.useHistLmr)
@@ -587,15 +592,19 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
         // Principal Variation Search with the LMR reduction folded in: full window for
         // the first move; a null-window scout (reduced for late quiets) for the rest,
         // re-searched at full depth on a surprise and at the full window for a new PV.
+        // Node types alternate: the first child of a non-PV node is the opposite type to its
+        // parent, a reduced scout is expected to fail high (a cut node), and a PV child is
+        // never one.
         Value score;
         if (moveCount == 1) {
-            score = -search(board, newDepth, -beta, -alpha, ply + 1, m);
+            score = -search(board, newDepth, -beta, -alpha, ply + 1, m, !pvNode && !cutNode);
         } else {
-            score = -search(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1, m);
+            score = -search(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1, m,
+                            reduction > 0 || !cutNode);
             if (reduction > 0 && score > alpha)
-                score = -search(board, newDepth, -alpha - 1, -alpha, ply + 1, m);
+                score = -search(board, newDepth, -alpha - 1, -alpha, ply + 1, m, !cutNode);
             if (score > alpha && score < beta)
-                score = -search(board, newDepth, -beta, -alpha, ply + 1, m);
+                score = -search(board, newDepth, -beta, -alpha, ply + 1, m, /*cutNode=*/false);
         }
 
         board.unmakeMove(m);
@@ -651,8 +660,8 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
             !(bound == BOUND_UPPER && best >= eval))
             corrHist_.update(corr, depth, best - eval);
 
-        tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : rawEval, bestMove,
-                  bound);
+        tt_.store(key, depth, valueToTT(best, ply), inCheck ? VALUE_NONE : rawEval, bestMove, bound,
+                  ttPv);
     }
 
     return best;
@@ -664,14 +673,16 @@ Value Searcher::search(Board& board, int depth, Value alpha, Value beta, int ply
 // full window. Returns the in-window score (or the last score on time-out).
 Value Searcher::aspirationSearch(Board& board, int depth, Value prevScore) {
     if (!tp_.useAspiration || depth < ASPIRATION_MIN_DEPTH || is_mate(prevScore))
-        return search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0, Move(Move::NO_MOVE));
+        return search(board, depth, -VALUE_INFINITE, VALUE_INFINITE, 0, Move(Move::NO_MOVE),
+                      /*cutNode=*/false);
 
     Value delta = tp_.aspirationDelta;
     Value alpha = std::max<Value>(prevScore - delta, -VALUE_INFINITE);
     Value beta  = std::min<Value>(prevScore + delta, VALUE_INFINITE);
 
     while (true) {
-        const Value v = search(board, depth, alpha, beta, 0, Move(Move::NO_MOVE));
+        const Value v =
+            search(board, depth, alpha, beta, 0, Move(Move::NO_MOVE), /*cutNode=*/false);
         if (timeUp_) return v;
         if (v <= alpha) { // fail low: relax alpha, pull beta toward the middle
             beta  = (alpha + beta) / 2;
@@ -704,6 +715,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
     const uint64_t key     = board.hash();
     const TTProbe  tt      = tt_.probe(key);
     const Value    ttValue = tt.hit ? valueFromTT(tt.value, ply) : VALUE_NONE;
+    const bool     ttPv    = pvNode || (tt.hit && tt.wasPv); // kept so a q-store keeps it
     if (tt.hit && !pvNode && tt.depth >= QS_TT_DEPTH &&
         board.halfMoveClock() < TT_CUTOFF_MAX_HALFMOVE &&
         ttBoundCuts(tt.bound, ttValue, alpha, beta))
@@ -725,7 +737,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
         if (best >= beta) { // fail-soft beta cutoff
             if (canStore)
                 tt_.store(key, QS_TT_DEPTH, valueToTT(best, ply), rawEval, Move(Move::NO_MOVE),
-                          BOUND_LOWER);
+                          BOUND_LOWER, ttPv);
             return best;
         }
         if (best > alpha) alpha = best;
@@ -786,7 +798,7 @@ Value Searcher::qsearch(Board& board, Value alpha, Value beta, int ply) {
 
     if (canStore)
         tt_.store(key, QS_TT_DEPTH, valueToTT(best, ply), rawEval, bestMove,
-                  best >= beta ? BOUND_LOWER : BOUND_UPPER);
+                  best >= beta ? BOUND_LOWER : BOUND_UPPER, ttPv);
     return best;
 }
 

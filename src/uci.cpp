@@ -296,6 +296,10 @@ void Engine::handleSetOption(std::istringstream& is) {
             tunables_.histPruneMargin = std::clamp(std::stoi(value), 128, 16384);
         } else if (name == "HistLmrDiv" && !value.empty()) {
             tunables_.histLmrDiv = std::clamp(std::stoi(value), 512, 65536);
+        } else if (name == "LmrCutNode" && !value.empty()) {
+            tunables_.lmrCutNode = std::clamp(std::stoi(value), 0, 3);
+        } else if (name == "LmrTtPv" && !value.empty()) {
+            tunables_.lmrTtPv = std::clamp(std::stoi(value), 0, 3);
         }
         // Phase 1d whole-node pruning margins (cp; SPSA-tunable).
         else if (name == "RazorBase" && !value.empty()) {
@@ -379,6 +383,8 @@ void Engine::loop() {
                       << "option name SingularDoubleMargin type spin default 44 min 0 max 200\n"
                       << "option name HistPruneMargin type spin default 2048 min 128 max 16384\n"
                       << "option name HistLmrDiv type spin default 6546 min 512 max 65536\n"
+                      << "option name LmrCutNode type spin default 1 min 0 max 3\n"
+                      << "option name LmrTtPv type spin default 1 min 0 max 3\n"
                       << "option name RazorBase type spin default 180 min 0 max 600\n"
                       << "option name RazorMargin type spin default 160 min 0 max 400\n"
                       << "option name ProbCutMinDepth type spin default 5 min 3 max 12\n"

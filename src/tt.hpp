@@ -9,9 +9,9 @@ namespace engine {
 // How a stored value relates to the true score of a position.
 enum Bound : uint8_t {
     BOUND_NONE  = 0,
-    BOUND_UPPER = 1,   // fail-low:  value is an upper bound (true score <= value)
-    BOUND_LOWER = 2,   // fail-high: value is a lower bound (true score >= value)
-    BOUND_EXACT = 3,   // PV node:   value is exact
+    BOUND_UPPER = 1, // fail-low:  value is an upper bound (true score <= value)
+    BOUND_LOWER = 2, // fail-high: value is a lower bound (true score >= value)
+    BOUND_EXACT = 3, // PV node:   value is exact
 };
 
 // Result of a TT probe. `value`/`eval` are the raw stored numbers; a mate `value`
@@ -23,6 +23,7 @@ struct TTProbe {
     Value eval  = VALUE_NONE;
     int   depth = 0;
     Bound bound = BOUND_NONE;
+    bool  wasPv = false; // stored from a node that was on (or had been on) a PV
 };
 
 // Mate scores are stored relative to the node, not the root, so an entry stays
@@ -46,7 +47,9 @@ public:
     void newSearch() { generation_ = static_cast<uint8_t>((generation_ + 1) & GEN_MASK); }
 
     TTProbe probe(uint64_t key) const;
-    void store(uint64_t key, int depth, Value value, Value eval, Move move, Bound bound);
+    // `pv` marks a node that is, or once was, on a principal variation (the search's ttPv).
+    void store(uint64_t key, int depth, Value value, Value eval, Move move, Bound bound,
+               bool pv = false);
 
     // Hint the CPU to pull a key's cluster into cache before it is probed.
     void prefetch(uint64_t key) const;
@@ -60,20 +63,21 @@ private:
         uint64_t data = 0;
     };
 
-    static constexpr size_t CLUSTER_SIZE = 4;   // 4 x 16B = one 64-byte cache line
+    static constexpr size_t CLUSTER_SIZE = 4; // 4 x 16B = one 64-byte cache line
     struct alignas(64) Cluster {
         Entry entries[CLUSTER_SIZE];
     };
 
-    static constexpr uint8_t GEN_BITS  = 6;
-    static constexpr uint8_t GEN_MASK  = (1U << GEN_BITS) - 1;   // 63
-    static constexpr uint8_t GEN_CYCLE = 1U << GEN_BITS;         // 64
+    // The top byte packs generation[5] pv[1] bound[2]; 32 generations is ample for aging.
+    static constexpr uint8_t GEN_BITS  = 5;
+    static constexpr uint8_t GEN_MASK  = (1U << GEN_BITS) - 1; // 31
+    static constexpr uint8_t GEN_CYCLE = 1U << GEN_BITS;       // 32
 
     size_t clusterIndex(uint64_t key) const;
     int    relativeAge(uint8_t genBound) const;
 
     std::vector<Cluster> table_;
-    uint8_t generation_ = 0;
+    uint8_t              generation_ = 0;
 };
 
 } // namespace engine

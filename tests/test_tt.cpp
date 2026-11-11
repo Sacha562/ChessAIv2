@@ -10,9 +10,13 @@
 using namespace engine;
 
 namespace {
-Move            mv(uint16_t bits) { return Move(bits); }
-const Move      NO_MV = Move(Move::NO_MOVE);
-int             bi(Bound b) { return static_cast<int>(b); }   // for doctest printing
+Move mv(uint16_t bits) {
+    return Move(bits);
+}
+const Move NO_MV = Move(Move::NO_MOVE);
+int        bi(Bound b) {
+    return static_cast<int>(b);
+} // for doctest printing
 } // namespace
 
 TEST_CASE("valueToTT / valueFromTT rebase mates and pass everything else through") {
@@ -79,14 +83,14 @@ TEST_CASE("a same-slot store carrying NO_MOVE preserves the stored move") {
     tt.store(0xABC, 6, 120, VALUE_NONE, NO_MV, BOUND_LOWER);
     const TTProbe p = tt.probe(0xABC);
     REQUIRE(p.hit);
-    CHECK(p.move.move() == 0x1234);   // preserved
-    CHECK(p.depth == 6);              // everything else updated
+    CHECK(p.move.move() == 0x1234); // preserved
+    CHECK(p.depth == 6);            // everything else updated
     CHECK(bi(p.bound) == bi(BOUND_LOWER));
 }
 
 TEST_CASE("every Bound flag round-trips") {
     TranspositionTable tt(1);
-    uint64_t k = 1;
+    uint64_t           k = 1;
     for (Bound b : {BOUND_UPPER, BOUND_LOWER, BOUND_EXACT}) {
         tt.store(k, 1, 1, VALUE_NONE, NO_MV, b);
         CHECK(bi(tt.probe(k).bound) == bi(b));
@@ -98,8 +102,8 @@ TEST_CASE("extreme values and evals survive the int16 pack") {
     TranspositionTable tt(1);
     // The int16 fields span [-32768, 32767]; real engine scores never exceed
     // +/-VALUE_NONE (32002), so these boundary values probe the packing itself.
-    const Value values[] = {VALUE_MATE, -VALUE_MATE, VALUE_MATE_IN_MAX_PLY,
-                            VALUE_NONE, 32767, -32768, 0, -1, 1};
+    const Value values[] = {
+        VALUE_MATE, -VALUE_MATE, VALUE_MATE_IN_MAX_PLY, VALUE_NONE, 32767, -32768, 0, -1, 1};
     uint64_t k = 1;
     for (Value v : values) {
         tt.store(k, 1, v, v, NO_MV, BOUND_EXACT);
@@ -124,52 +128,54 @@ TEST_CASE("depth round-trips across the signed int8 range") {
 
 TEST_CASE("a mate score survives storage node-relative and rebases on read") {
     TranspositionTable tt(1);
-    const int   ply = 4;
-    const Value win = mate_in(ply + 3);
+    const int          ply = 4;
+    const Value        win = mate_in(ply + 3);
     tt.store(0x77, 5, valueToTT(win, ply), VALUE_NONE, NO_MV, BOUND_EXACT);
     const TTProbe p = tt.probe(0x77);
     REQUIRE(p.hit);
-    CHECK(p.value == mate_in(3));                  // node-relative in the table
-    CHECK(valueFromTT(p.value, ply) == win);       // root-relative after rebasing
+    CHECK(p.value == mate_in(3));            // node-relative in the table
+    CHECK(valueFromTT(p.value, ply) == win); // root-relative after rebasing
 }
 
 TEST_CASE("a zero Zobrist key is stored and probed correctly") {
     TranspositionTable tt(1);
-    CHECK_FALSE(tt.probe(0).hit);                  // empty slots read as key^data==0
+    CHECK_FALSE(tt.probe(0).hit); // empty slots read as key^data==0
     tt.store(0, 3, 55, VALUE_NONE, mv(7), BOUND_EXACT);
     const TTProbe p = tt.probe(0);
     REQUIRE(p.hit);
     CHECK(p.value == 55);
     CHECK(p.move.move() == 7);
-    CHECK_FALSE(tt.probe(0xFFFF).hit);             // other keys must not match it
+    CHECK_FALSE(tt.probe(0xFFFF).hit); // other keys must not match it
 }
 
 TEST_CASE("bucket replacement evicts the shallowest entry first") {
-    TranspositionTable tt(0);   // one 4-way cluster: every key maps to cluster 0
+    TranspositionTable tt(0); // one 4-way cluster: every key maps to cluster 0
     tt.newSearch();
-    tt.store(0x100, 1, 50, VALUE_NONE, mv(1), BOUND_EXACT);   // slot 0, shallow
+    tt.store(0x100, 1, 50, VALUE_NONE, mv(1), BOUND_EXACT); // slot 0, shallow
     tt.store(0x200, 10, 60, VALUE_NONE, mv(2), BOUND_EXACT);
     tt.store(0x300, 10, 70, VALUE_NONE, mv(3), BOUND_EXACT);
-    tt.store(0x400, 10, 80, VALUE_NONE, mv(4), BOUND_EXACT);  // cluster full
-    for (uint64_t k : {0x100, 0x200, 0x300, 0x400}) REQUIRE(tt.probe(k).hit);
+    tt.store(0x400, 10, 80, VALUE_NONE, mv(4), BOUND_EXACT); // cluster full
+    for (uint64_t k : {0x100, 0x200, 0x300, 0x400})
+        REQUIRE(tt.probe(k).hit);
 
-    tt.store(0x500, 5, 90, VALUE_NONE, mv(5), BOUND_EXACT);   // must evict one
-    CHECK_FALSE(tt.probe(0x100).hit);                         // the depth-1 entry
-    for (uint64_t k : {0x200, 0x300, 0x400, 0x500}) CHECK(tt.probe(k).hit);
+    tt.store(0x500, 5, 90, VALUE_NONE, mv(5), BOUND_EXACT); // must evict one
+    CHECK_FALSE(tt.probe(0x100).hit);                       // the depth-1 entry
+    for (uint64_t k : {0x200, 0x300, 0x400, 0x500})
+        CHECK(tt.probe(k).hit);
 }
 
 TEST_CASE("older generations are replaced before fresh ones of equal depth") {
-    TranspositionTable tt(0);   // single cluster
-    tt.newSearch();             // generation 1
+    TranspositionTable tt(0); // single cluster
+    tt.newSearch();           // generation 1
     for (uint64_t k : {0x1, 0x2, 0x3, 0x4})
         tt.store(k, 10, 1, VALUE_NONE, mv(static_cast<uint16_t>(k)), BOUND_EXACT);
 
-    tt.newSearch();             // generation 2 — the four entries are now one gen old
+    tt.newSearch(); // generation 2 — the four entries are now one gen old
     tt.store(0x5, 10, 2, VALUE_NONE, mv(5), BOUND_EXACT);
-    CHECK_FALSE(tt.probe(0x1).hit);   // an aged entry was evicted for the fresh key
+    CHECK_FALSE(tt.probe(0x1).hit); // an aged entry was evicted for the fresh key
     tt.store(0x6, 10, 3, VALUE_NONE, mv(6), BOUND_EXACT);
-    CHECK(tt.probe(0x5).hit);         // the fresh gen-2 entry survives...
-    CHECK_FALSE(tt.probe(0x2).hit);   // ...another aged entry is evicted instead
+    CHECK(tt.probe(0x5).hit);       // the fresh gen-2 entry survives...
+    CHECK_FALSE(tt.probe(0x2).hit); // ...another aged entry is evicted instead
 }
 
 TEST_CASE("clear and resize drop all entries") {
@@ -187,12 +193,12 @@ TEST_CASE("clear and resize drop all entries") {
 }
 
 TEST_CASE("hashfull reports current-generation occupancy in permille") {
-    TranspositionTable tt(0);   // 1 cluster = 4 slots
+    TranspositionTable tt(0); // 1 cluster = 4 slots
     CHECK(tt.hashfull() == 0);
     tt.newSearch();
     tt.store(1, 5, 1, VALUE_NONE, NO_MV, BOUND_EXACT);
     tt.store(2, 5, 1, VALUE_NONE, NO_MV, BOUND_EXACT);
-    CHECK(tt.hashfull() == 500);   // 2 of 4 slots at the current generation
+    CHECK(tt.hashfull() == 500); // 2 of 4 slots at the current generation
 }
 
 TEST_CASE("prefetch on any key is safe") {
@@ -205,7 +211,7 @@ TEST_CASE("prefetch on any key is safe") {
 TEST_CASE("randomized stress: immediate probe always hits and round-trips") {
     TranspositionTable tt(1);
     tt.newSearch();
-    uint64_t x = 0x123456789ABCDEFull;   // xorshift, deterministic
+    uint64_t x = 0x123456789ABCDEFull; // xorshift, deterministic
     for (int i = 0; i < 20000; ++i) {
         x ^= x << 13;
         x ^= x >> 7;
@@ -213,7 +219,7 @@ TEST_CASE("randomized stress: immediate probe always hits and round-trips") {
         const Value v = static_cast<int16_t>(x);
         tt.store(x, 1, v, VALUE_NONE, mv(static_cast<uint16_t>(x)), BOUND_EXACT);
         const TTProbe p = tt.probe(x);
-        REQUIRE(p.hit);                  // just-stored key must be found
+        REQUIRE(p.hit); // just-stored key must be found
         CHECK(p.value == v);
         CHECK(p.move.move() == static_cast<uint16_t>(x));
     }
@@ -223,8 +229,8 @@ TEST_CASE("identical operation sequences produce identical results") {
     auto run = [](TranspositionTable& t) {
         t.newSearch();
         for (uint64_t k = 1; k <= 200; ++k)
-            t.store(k * 2654435761ull, static_cast<int>(k % 13), static_cast<int>(k),
-                    VALUE_NONE, mv(static_cast<uint16_t>(k)), BOUND_EXACT);
+            t.store(k * 2654435761ull, static_cast<int>(k % 13), static_cast<int>(k), VALUE_NONE,
+                    mv(static_cast<uint16_t>(k)), BOUND_EXACT);
         int hits = 0;
         for (uint64_t k = 1; k <= 200; ++k)
             if (t.probe(k * 2654435761ull).hit) ++hits;
@@ -233,4 +239,23 @@ TEST_CASE("identical operation sequences produce identical results") {
     TranspositionTable a(1);
     TranspositionTable b(1);
     CHECK(run(a) == run(b));
+}
+
+TEST_CASE("the pv flag round-trips without disturbing bound or aging") {
+    TranspositionTable tt(1);
+    tt.store(0x31, 4, 10, VALUE_NONE, mv(1), BOUND_LOWER, /*pv=*/true);
+    tt.store(0x32, 4, 10, VALUE_NONE, mv(2), BOUND_UPPER);
+    const TTProbe pv    = tt.probe(0x31);
+    const TTProbe nonPv = tt.probe(0x32);
+    REQUIRE(pv.hit);
+    REQUIRE(nonPv.hit);
+    CHECK(pv.wasPv);
+    CHECK(pv.bound == BOUND_LOWER);
+    CHECK_FALSE(nonPv.wasPv);
+    CHECK(nonPv.bound == BOUND_UPPER);
+    for (int g = 0; g < 40; ++g)
+        tt.newSearch(); // wrap the generation counter
+    tt.store(0x31, 5, 20, VALUE_NONE, mv(1), BOUND_EXACT, /*pv=*/true);
+    CHECK(tt.probe(0x31).wasPv);
+    CHECK(tt.probe(0x31).bound == BOUND_EXACT);
 }
