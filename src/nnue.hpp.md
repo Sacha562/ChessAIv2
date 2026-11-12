@@ -55,7 +55,7 @@ back **+20% nps**.
 
 The default network is linked into the executable so the engine is one self-contained
 file ([PLAN.md](../PLAN.md) §0.4). The build passes its absolute path as the `EVALFILE`
-string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net6.bin`
+string macro: the [Makefile](../build.md#nnue-network) sets `EVALFILE ?= nets/net7.bin`
 (OpenBench overrides it with `make EVALFILE=<net>`), and CMake has an `EVALFILE` cache path.
 A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 (`.rodata` on ELF, `.rdata` on Windows/COFF), 64-byte aligned, between two global labels.
@@ -64,17 +64,18 @@ A top-level `asm` block then `.incbin`s the file's bytes into read-only data
 releases has no `#embed` (and Clang only offers it as an extension). MSVC has no GNU-style
 top-level `asm`, so an MSVC build, or any build without `EVALFILE`, embeds nothing:
 `embeddedNetwork()` returns `nullptr` and the engine uses the HCE unless `EvalFile` loads a
-file. The default network is `nets/net6.bin`, committed to the repository
-(1,607,744 bytes, SHA-256 `174d3cb3…f8b82fd5`); the **bench signature with it is 42658
-nodes** (36507 with net5 after node-type LMR, 31807 before it, 31508 before the q-search TT and the widened correction history; 34410 with net4 after the v0.5.1 search re-tune, 35830 before it; 46936 with
-net3, 42410 with net2). net6 keeps net2's shape and net5's training data: run4
+file. The default network is `nets/net7.bin`, committed to the repository
+(1,607,744 bytes, SHA-256 `5aed3076…1d797e5b`); the **bench signature with it is 48274
+nodes** (42658 with net6, 36507 with net5 after node-type LMR, 31807 before it, 31508 before the q-search TT and the widened correction history; 34410 with net4 after the v0.5.1 search re-tune, 35830 before it; 46936 with
+net3, 42410 with net2). net7 keeps net2's shape and net5's training data: run4
 (300M positions of net4 self-play) once, run3 (114M, net2 self-play) twice and run2
 (300M, net1 self-play) once, 714M distinct positions, all scored by Stockfish 19 at
 5,000 nodes and scaled by 1.25 onto the engine's centipawn scale. Only the loss blend
-changed: the game result now weighs **0.2** against the Stockfish score (net5: 0.4).
-A sweep of three recipes on that data, 160 superbatches each (2 h 40 min on the RX 6800
-XT), found the lower WDL weight best: +35.0 ± 10.9 Elo vs net5; a loss power of 2.5 at
-WDL 0.4 gave +14.1 and WDL 0.6 lost 65. A 1536-wide net with 10
+changed: the target is now the Stockfish score alone, with the game result weighted
+**0.0** (net6: 0.2, net5: 0.4). Two recipe sweeps on that data, 160 superbatches each
+(about 2 h 40 min each on the RX 6800 XT), found every lower WDL weight better: 0.2 gave
++35.0 ± 10.9 Elo vs net5 (a loss power of 2.5 at WDL 0.4 gave +14.1, WDL 0.6 lost 65),
+0.1 then gave +11.7 ± 6.1 vs net6, and 0.0 gave +9.4 ± 5.4 vs 0.1. A 1536-wide net with 10
 king buckets, trained on net2's own data, lost Elo and was not shipped.
 
 ## The network
