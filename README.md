@@ -9,10 +9,11 @@ The full component design and staged roadmap live in [`PLAN.md`](PLAN.md), whose
 step was worth. This README covers what the engine does today and how to build,
 run, and test it.
 
-## Status — v0.8 (net7) · next: width / king buckets on the 714M positions and a fifth generation of self-play
+## Status — v0.9 (net8) · next: width / king buckets on the 1,014M positions and a sixth generation of self-play
 
 | Release | Phase | Highlights |
 |---|---|---|
+| [v0.9](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.9) | 2 — NNUE (net8) | Eighth net: a fifth generation of self-play (300M positions of v0.8 games, Stockfish-scored) on top of net7's data, about 1,014M positions in all, and a loss power of 2.5 instead of 2.0. **+19.0 Elo** vs v0.8 |
 | [v0.8](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.8) | 2 — NNUE (net7) | Seventh net: same data and shape, trained on the Stockfish score alone, with no game-result term (net6 weighted it 0.2). Two SPRTs stepped the weight down: 0.1 beat v0.7 by **+11.7 Elo**, then 0.0 beat 0.1 by **+9.4 Elo** (about +21 vs v0.7 combined, not measured directly) |
 | [v0.7](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.7) | 2 — NNUE (net6) + search | Sixth net: net5's data and shape, with the game result weighted 0.2 instead of 0.4 against the Stockfish score (+35.0 alone); plus late-move reductions by node type, one ply more at expected cut nodes and one less at nodes that were on a PV (+8.9 and +5.3 alone): **+60.6 Elo** vs v0.6.2 |
 | [v0.6.2](https://github.com/Sacha562/ChessAIv2/releases/tag/v0.6.2) | 1d — search | Move-ordering history and correction history now carry over from one move's search to the next for the whole game (cleared on `ucinewgame`; only the ply-indexed killers start over each search): **+14.2 Elo** vs v0.6.1 |
