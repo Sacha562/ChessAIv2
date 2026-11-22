@@ -48,11 +48,18 @@ Pydantic request bodies:
 Candidates are always identified by the move list of their position, never by
 key, because the browser cannot hold 64-bit keys.
 
+### Constants
+
+| Name | Value | Meaning |
+|------|-------|---------|
+| `MANUAL_TIER_MAX` | `9` | Highest tier a dashboard candidate can get. |
+| `SHIM_BUSY_TIMEOUT_S` | `2.0` | How long a shim select waits for the write lock. The shim gives up after its `BookTimeout` (1 s by default), so waiting longer only piles requests up behind the analysis thread. |
+
 ### Shim endpoints
 
 | Method | Path | Effect |
 |--------|------|--------|
-| POST | `/api/shim/select` | [`selector.choose`](selector.py.md#choose); returns `{move, source, detail}`. The opponent name is lowercased. Wakes the worker (a miss may have queued a job). |
+| POST | `/api/shim/select` | [`selector.choose`](selector.py.md#choose); returns `{move, source, detail}`. The opponent name is lowercased. Wakes the worker (a miss may have queued a job). Its connection waits at most `SHIM_BUSY_TIMEOUT_S` for the write lock; when still locked it logs a warning and answers `{move: null, source: "busy"}`, so the engine plays the move. |
 | POST | `/api/shim/game_start` | [`Worker.game_started`](worker.py.md#workergame_started--workergame_ended): analysis pauses. |
 | POST | `/api/shim/game_end` | [`Worker.game_ended`](worker.py.md#workergame_started--workergame_ended): analysis resumes; ingest in 10 s. |
 

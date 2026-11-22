@@ -305,7 +305,11 @@ def run_candidates(conn: sqlite3.Connection, stockfish: Stockfish, key: int, fen
 
 
 def run_signal(conn: sqlite3.Connection, stockfish: Stockfish, game_id: str, settings: dict) -> None:
-    """Evaluate the plies after one game's book exit for the eval signal."""
+    """Evaluate the plies after one game's book exit for the eval signal.
+
+    Commits after every ply, so no write lock is held while Stockfish searches
+    and an interrupted run resumes where it stopped.
+    """
     game = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
     if game is None:
         return
@@ -323,9 +327,9 @@ def run_signal(conn: sqlite3.Connection, stockfish: Stockfish, game_id: str, set
             expected = stockfish.position_expected(board, nodes, color)
             conn.execute("INSERT OR REPLACE INTO signal_evals(game_id, ply, expected) VALUES(?,?,?)",
                          (game_id, ply, expected))
+            conn.commit()
             todo.discard(ply)
         board.push_uci(uci)
-    conn.commit()
 
 
 def run_deepen(conn: sqlite3.Connection, stockfish: Stockfish, opponent: str, settings: dict) -> None:

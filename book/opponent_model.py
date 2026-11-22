@@ -172,6 +172,8 @@ def _score_candidate(conn: sqlite3.Connection, stockfish: Stockfish, opponent: s
 
     Returns None when the model cannot predict the reply (nothing to add over
     the generic book), and deletes any value stored from an earlier prediction.
+    Each write commits at once, so no write lock is held while Stockfish scores
+    the next candidate.
     """
     after = board.copy()
     after.push(move)
@@ -181,6 +183,7 @@ def _score_candidate(conn: sqlite3.Connection, stockfish: Stockfish, opponent: s
     if not replies:
         conn.execute("DELETE FROM opponent_model WHERE opponent = ? AND key = ? AND move = ?",
                      (opponent, key, move.uci()))  # a stale prediction must not keep weighting
+        conn.commit()
         return None
     signature = _reply_signature(replies)
     cached = conn.execute("SELECT expected, replies FROM opponent_model WHERE opponent = ? "
@@ -200,6 +203,7 @@ def _score_candidate(conn: sqlite3.Connection, stockfish: Stockfish, opponent: s
         "source = excluded.source, replies = excluded.replies, updated_at = excluded.updated_at",
         (opponent, key, move.uci(), expected, replies[0].move, replies[0].prob, replies[0].source,
          signature, db.now()))
+    conn.commit()
     return expected, replies
 
 

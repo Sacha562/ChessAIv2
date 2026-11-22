@@ -6,13 +6,15 @@ See [test_book.py.md](test_book.py.md).
 from __future__ import annotations
 
 import random
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import chess
 
-from book import config, db, ingest, opponent_model, prep, scoring, selector, stats
+from book import config, db, ingest, opponent_model, prep, scoring, selector, stats, worker
 
 ACCOUNT = "SmikkelBot"
 
@@ -325,6 +327,19 @@ class FakeStockfish:
         return self.scores.get(board.board_fen(), 0.5)
 
 
+class LockCheckingStockfish(FakeStockfish):
+    """Counts searches that run while ``conn`` holds an open write transaction."""
+
+    def __init__(self, conn: sqlite3.Connection, scores: dict[str, float]) -> None:
+        super().__init__(scores)
+        self.conn = conn
+        self.calls_holding_lock = 0
+
+    def position_expected(self, board: chess.Board, nodes: int, pov: chess.Color) -> float:
+        self.calls_holding_lock += int(self.conn.in_transaction)
+        return super().position_expected(board, nodes, pov)
+
+
 def bongcloud_history(case: "DbTestCase", games: int = 4) -> None:
     """Opponent 'bong' plays 1...e5 2...Ke7 as Black and 1.e4 2.Ke2 as White."""
     for i in range(games):
@@ -433,6 +448,23 @@ class OpponentModelTests(DbTestCase):
         opponent_model.deepen(self.conn, stockfish, "bong", self.settings, ensure)
         self.assertEqual(stockfish.calls, calls)  # unchanged predictions are cached
 
+    def test_deepen_holds_no_write_lock_while_searching(self) -> None:
+        bongcloud_history(self)
+        stockfish = LockCheckingStockfish(self.conn, {})
+
+        def ensure(board: chess.Board) -> None:
+            moves = tuple(m.uci() for m in board.move_stack)
+            if moves == ("e2e4", "e7e5"):
+                self.add_candidate(moves, "g1f3", 0, 0.55)
+                self.add_candidate(moves, "f2f4", 2, 0.45)
+            elif not moves:
+                self.add_candidate(moves, "e2e4", 0, 0.55)
+
+        self.settings["max_book_ply"] = 4
+        opponent_model.deepen(self.conn, stockfish, "bong", self.settings, ensure)
+        self.assertGreater(stockfish.calls, 1)
+        self.assertEqual(stockfish.calls_holding_lock, 0)
+
     def test_model_reweights_and_promotes_for_that_opponent_only(self) -> None:
         bongcloud_history(self)
         moves = ("e2e4", "e7e5")
@@ -454,6 +486,21 @@ class OpponentModelTests(DbTestCase):
         bongcloud_history(self, games=5)
         jobs = self.conn.execute("SELECT target FROM analysis_queue WHERE kind = 'deepen'").fetchall()
         self.assertEqual([j["target"] for j in jobs], ["bong"])
+
+
+class WorkerTests(DbTestCase):
+    def test_signal_holds_no_write_lock_while_searching(self) -> None:
+        self.conn.execute("INSERT INTO book_events(game_id, ply, key, move, source, opponent, "
+                          "speed, created_at) VALUES('s1', 0, 0, 'e2e4', 'book', 'rivalbot', "
+                          "'blitz', 0)")  # the book served 1.e4, so the exit is ply 2
+        game = self.store(raw_game("s1", "e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6", True, "white"))
+        stockfish = LockCheckingStockfish(self.conn, {})
+        worker.run_signal(self.conn, stockfish, game.id, self.settings)
+        stored = self.conn.execute("SELECT COUNT(*) FROM signal_evals WHERE game_id = ?",
+                                   (game.id,)).fetchone()[0]
+        self.assertGreater(stockfish.calls, 1)
+        self.assertEqual(stored, stockfish.calls)
+        self.assertEqual(stockfish.calls_holding_lock, 0)
 
 
 class ServerTests(DbTestCase):
@@ -485,6 +532,26 @@ class ServerTests(DbTestCase):
                                                            "color": "white", "opponent": "Bongaclang",
                                                            "speed": "bullet"})
             self.assertEqual((served.json()["move"], served.json()["source"]), ("f2f4", "prep"))
+
+    def test_shim_answers_busy_while_database_is_locked(self) -> None:
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:  # httpx missing
+            self.skipTest("fastapi.testclient needs httpx")
+        from book import server
+        static = config.StaticConfig(Path(self.tmp.name) / "book.sqlite", Path("stockfish"),
+                                     "127.0.0.1", 0)
+        with TestClient(server.create_app(static, start_worker=False)) as client, \
+                mock.patch.object(server, "SHIM_BUSY_TIMEOUT_S", 0.05):
+            self.conn.execute("BEGIN IMMEDIATE")  # another writer holds the lock
+            try:
+                pick = client.post("/api/shim/select", json={"game_id": "x", "moves": [],
+                                                             "color": "white", "opponent": "a",
+                                                             "speed": "blitz"})
+            finally:
+                self.conn.rollback()
+            self.assertEqual(pick.status_code, 200)
+            self.assertEqual((pick.json()["move"], pick.json()["source"]), (None, "busy"))
 
 
 if __name__ == "__main__":

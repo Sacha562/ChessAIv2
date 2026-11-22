@@ -24,6 +24,10 @@ daemon threads.
 
 - **Code:** [worker.py](worker.py)
 
+## Related Test Documentation
+
+- [tests/test_book.py.md](tests/test_book.py.md) (`WorkerTests`)
+
 ## Objects / Interfaces
 
 ### Timing constants
@@ -152,4 +156,6 @@ deepening also grows the candidate set where the opponent is heading.
 
 For one game, evaluates every ply from [`signal_plies`](scoring.py.md#signal_plies)
 not already in `signal_evals`. Each position gets a `signal_nodes` search, and
-the expected score is stored from our side. Commits once at the end.
+the expected score is stored from our side. Commits after every ply, so no write
+lock is held while Stockfish searches (the shim's move requests would wait on
+it), and an interrupted run resumes at the first missing ply.

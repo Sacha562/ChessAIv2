@@ -137,6 +137,10 @@ predicted. Nothing is stored in that case, because the model would add nothing
 over the generic book, and a row stored from an earlier prediction is deleted.
 Otherwise a habit the opponent dropped would keep weighting the move.
 
+**Side effects:** the upsert or delete commits at once, so no write lock is held
+while Stockfish scores the next candidate (the shim's move requests would wait
+on it).
+
 ### `_position_value`
 
 Stockfish expected score for us, or 1 / ½ / 0 for a finished game.
@@ -161,6 +165,7 @@ Walks the predicted lines breadth-first:
      likely reply.
 
 A line stops where the reply can't be predicted. At most `model_max_positions`
-positions are expanded per run; each position commits.
+positions are expanded per run; every model write commits on its own
+([`_score_candidate`](#_score_candidate)).
 
 **Returns:** positions expanded.

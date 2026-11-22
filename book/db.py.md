@@ -7,7 +7,9 @@ process ([server.py.md](server.py.md)) and the CLI ([\_\_main\_\_.py.md](__main_
 open the file. In production it sits on the `book` container's `/data` volume
 ([Dockerfile.md](Dockerfile.md)), and lichess-bot talks HTTP, so SQLite locking
 never crosses a container boundary. WAL journaling lets the dashboard read while the
-worker writes.
+worker writes. Only one connection can write at a time, so every writer commits
+before any slow step (a Stockfish search, a network read). A held write lock
+would otherwise stall the shim's live move requests.
 
 ## Source File
 
@@ -35,6 +37,12 @@ worker writes.
 | `settings` | `name` | JSON-encoded overrides of [`DEFAULT_SETTINGS`](config.py.md#default_settings). |
 | `meta` | `name` | `last_created_at` (ingest cursor, lichess ms) and `last_ingest_at` (s). |
 
+### Constants
+
+| Name | Value | Meaning |
+|------|-------|---------|
+| `BUSY_TIMEOUT_S` | `30.0` | Default time a write waits for another connection's write lock. |
+
 ## Functions
 
 ### `position_key`
@@ -59,13 +67,20 @@ Opens or creates the database at `path` (creating parent directories), sets
 `row_factory = sqlite3.Row`, enables WAL and foreign keys, and applies
 `SCHEMA` (idempotent `CREATE … IF NOT EXISTS`).
 
-**Returns:** a `sqlite3.Connection` created with `check_same_thread=False` and
-a 30 s busy timeout.
+**Parameters:** `path`; `busy_timeout_s` (default
+[`BUSY_TIMEOUT_S`](#constants)), how long a write waits for another
+connection's write lock.
+
+**Returns:** a `sqlite3.Connection` created with `check_same_thread=False`.
+
+**Errors:** a write still locked after `busy_timeout_s` raises
+`sqlite3.OperationalError` ("database is locked").
 
 ### `session`
 
-Context manager that yields a fresh [`connect`](#connect) connection and closes
-it afterwards. The server uses one per request; the worker uses one per step.
+Context manager that yields a fresh [`connect`](#connect) connection (same
+`busy_timeout_s`) and closes it afterwards. The server uses one per request; the
+worker uses one per step.
 
 ### `get_meta` / `set_meta`
 

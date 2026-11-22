@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _UINT64_SIGN = 1 << 63
 _UINT64_RANGE = 1 << 64
+BUSY_TIMEOUT_S = 30.0  # how long a write waits for another connection's write lock
 
 
 def position_key(board: chess.Board) -> int:
@@ -160,10 +161,14 @@ def now() -> int:
     return int(time.time())
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    """Open (creating if needed) the database at ``path`` with the schema applied."""
+def connect(path: Path, busy_timeout_s: float = BUSY_TIMEOUT_S) -> sqlite3.Connection:
+    """Open (creating if needed) the database at ``path`` with the schema applied.
+
+    A write waits up to ``busy_timeout_s`` for another connection's write lock
+    before raising ``sqlite3.OperationalError`` ("database is locked").
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
+    conn = sqlite3.connect(path, timeout=busy_timeout_s, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -172,9 +177,9 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 @contextmanager
-def session(path: Path) -> Iterator[sqlite3.Connection]:
+def session(path: Path, busy_timeout_s: float = BUSY_TIMEOUT_S) -> Iterator[sqlite3.Connection]:
     """Yield a fresh connection and close it afterwards (one per thread/request)."""
-    conn = connect(path)
+    conn = connect(path, busy_timeout_s)
     try:
         yield conn
     finally:

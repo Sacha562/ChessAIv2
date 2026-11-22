@@ -7,7 +7,9 @@ its own connection. See [server.py.md](server.py.md).
 """
 from __future__ import annotations
 
+import logging
 import random
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,6 +24,11 @@ from .worker import Worker, reset_running
 
 STATIC_DIR = config.PACKAGE_DIR / "static"
 MANUAL_TIER_MAX = 9
+# The shim gives up after its BookTimeout (1 s by default), so a select that
+# waits longer for the write lock only piles up behind the analysis thread.
+SHIM_BUSY_TIMEOUT_S = 2.0
+
+logger = logging.getLogger(__name__)
 
 
 class SelectBody(BaseModel):
@@ -158,8 +165,13 @@ def create_app(static: config.StaticConfig, start_worker: bool = True) -> FastAP
             game_id=body.game_id, moves=tuple(body.moves),
             color=chess.WHITE if body.color == "white" else chess.BLACK,
             opponent=body.opponent.lower(), speed=body.speed)
-        with db.session(static.db_path) as conn:
-            decision = selector.choose(conn, request, config.load_settings(conn), rng)
+        try:
+            with db.session(static.db_path, SHIM_BUSY_TIMEOUT_S) as conn:
+                decision = selector.choose(conn, request, config.load_settings(conn), rng)
+        except sqlite3.OperationalError as error:  # locked: the engine plays this move
+            logger.warning("shim select for %s ply %d: %s", request.game_id,
+                           len(request.moves), error)
+            return {"move": None, "source": "busy", "detail": {"error": str(error)}}
         worker.wake()
         return {"move": decision.move, "source": decision.source, "detail": decision.detail}
 

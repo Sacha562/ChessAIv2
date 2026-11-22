@@ -5,8 +5,11 @@ Strategy:
 - **Pure-function tests** for the posterior math and the signal.
 - **Database tests** against a fresh temporary SQLite file per test, fed with
   synthetic lichess export objects (`raw_game`), for ingest and the selector.
-- **One end-to-end API test** through FastAPI's `TestClient`, with the worker
+- **End-to-end API tests** through FastAPI's `TestClient`, with the worker
   disabled.
+- **Lock tests**: `LockCheckingStockfish` (a `FakeStockfish`) counts searches
+  that run while the connection has an open write transaction. That count must
+  stay 0, because a held write lock stalls the shim's live move requests.
 
 No network and no Stockfish are needed.
 
@@ -23,6 +26,7 @@ No network and no Stockfish are needed.
 - [../server.py.md](../server.py.md)
 - [../prep.py.md](../prep.py.md)
 - [../opponent_model.py.md](../opponent_model.py.md)
+- [../worker.py.md](../worker.py.md)
 - [../db.py.md](../db.py.md), [../config.py.md](../config.py.md)
 
 ## How to Build & Run
@@ -101,8 +105,13 @@ and `FakeStockfish` (scores looked up by board FEN).
 - `test_deepen_deletes_value_of_lost_prediction`: a stored 1.e3 d5 value predicted from the dropped 2.Ke2 habit is deleted once deepen can no longer predict a reply there.
 - `test_black_roots_cover_old_and_new_first_move`: two games into a switch, both 1.e4 and 1.e3 are deepen roots; with a high `model_root_min_prob` only the most likely one is.
 - `test_deepen_scores_moves_against_predicted_reply`: `deepen` scores 2.f4 by the position after the predicted 2...Ke7; a second run with unchanged predictions makes no Stockfish calls.
+- `test_deepen_holds_no_write_lock_while_searching`: in the same scenario, no Stockfish search runs while a model write is uncommitted.
 - `test_model_reweights_and_promotes_for_that_opponent_only`: a modelled tier-2 move becomes playable and outranks the tier-0 move against that opponent, but stays locked for others.
 - `test_predictable_opponent_auto_queues_deepen`: storing games of a predictable opponent queues one `deepen` job.
+
+### `WorkerTests`
+
+- `test_signal_holds_no_write_lock_while_searching`: with the book serving 1.e4 (exit at ply 2), `run_signal` stores one eval per searched ply and runs no search while a write is uncommitted.
 
 ### `ServerTests`
 
@@ -112,3 +121,4 @@ and `FakeStockfish` (scores looked up by board FEN).
   3. the shim endpoint then serves the manual move
   4. `POST /api/prep/line` with SAN (`e4 e5 f4 Ke7`, White) prepares `e2e4` and `f2f4`
   5. the shim serves `f2f4` with source `prep` for that opponent, even at another speed
+- `test_shim_answers_busy_while_database_is_locked`: while another connection holds the write lock (`BEGIN IMMEDIATE`) and `SHIM_BUSY_TIMEOUT_S` is patched to 0.05 s, a shim select that misses answers 200 with `{move: null, source: "busy"}` instead of a 500.
